@@ -1,0 +1,28 @@
+# ---- STM32 / C 빌드 산출물 ----
+Debug/
+Release/
+build/
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.su
+
+# ---- STM32CubeIDE ----
+.metadata/
+*.launch
+
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# ---- OS / 에디터 ----
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
