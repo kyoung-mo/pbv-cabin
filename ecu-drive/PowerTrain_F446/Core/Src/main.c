@@ -52,7 +52,24 @@ UART_HandleTypeDef huart2;
 /* CAN 통신용 구조체 변수 */
 struct model_car_net_drive_cmd_t rx_drive_cmd;       // 수신된 주행 명령 저장용
 struct model_car_net_drive_status_t tx_drive_status; // 송신할 구동 상태 저장용
-struct model_car_net_heartbeat_t rx_hear tbeat;       // 수신된 하트비트 저장용
+struct model_car_net_heartbeat_t rx_heartbeat;       // 수신된 하트비트 저장용
+
+/* CAN 송수신 하드웨어 핸들러 및 헤더 */
+CAN_RxHeaderTypeDef rx_header;
+CAN_TxHeaderTypeDef tx_header;
+uint8_t rx_data[8];
+uint8_t tx_data[8];
+uint32_t tx_mailbox;
+
+/* 세이프티 및 페일세이프 관련 변수 */
+uint32_t supervisor_wd_timer = 0; // 하트비트 무응답 시간 누적용 (ms 단위 카운트)
+uint8_t last_alive_counter = 0;   // 이전 하트비트 카운트 값 백업
+bool is_emergency_active = false; // 현재 비상 정지 상태 여부 플래그
+
+/* 엔코더 측정 및 속도 계산 변수 */
+int16_t left_encoder_count = 0;
+int16_t right_encoder_count = 0;
+double current_rpm = 0.0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -64,7 +81,7 @@ static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
-
+double calculate_actual_rpm(int16_t left_counts, int16_t right_counts);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -115,12 +132,54 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
+	  tx_drive_status.drive_motor_current = 0; // 실제로는 안쓰지만 dbc 구조 유지용
+	  /* 1. 절충안 세이프티: 하트비트(사령탑) 두절 감시 (300ms 초과 시) */
+	  if (supervisor_wd_timer >= 300) {
+		  is_emergency_active = true;
+		  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); // 좌측 모터 차단
+		  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); // 우측 모터 차단
+		  // 필요 시 비상 정지 상태임을 알리는 로그를 출력하거나 디버그 LED 점등
+	  }
 
+	  /* 2. 실제 바퀴 RPM 측정 (엔코더 타이머 값 파싱) */
+	  // 4체배 모드이므로 한 주기 동안 변화한 펄스 카운트를 받아 RPM 계산 공식 대입
+	  left_encoder_count = (int16_t)__HAL_TIM_GET_COUNTER(&htim2);
+	  right_encoder_count = (int16_t)__HAL_TIM_GET_COUNTER(&htim3);
+
+	  // 카운터 레지스터 클리어 (다음 주기의 변화량을 알기 위함)
+	  __HAL_TIM_SET_COUNTER(&htim2, 0);
+	  __HAL_TIM_SET_COUNTER(&htim3, 0);
+
+	  // 두 전륜 바퀴의 평균 회전 속도 계산 (예시 물리식)
+	  current_rpm = calculate_actual_rpm(left_encoder_count, right_encoder_count);
+
+	  /* 3. 사령탑(D3-G)으로 데이터 주기 보고 (Drive_Status 0x200 브로드캐스트) */
+	  tx_drive_status.current_velocity = model_car_net_drive_status_current_velocity_encode(current_rpm);
+	  //tx_drive_status.drive_motor_current = get_motor_current_ma(); // INA226 센서 값 매핑
+	  tx_drive_status.current_gear_status = rx_drive_cmd.gear_status; // 기어 상태 에코백 피드백
+
+	  // 라이브러리를 사용해 8바이트 데이터 필드 일렬 패킹 수행
+	  model_car_net_drive_status_pack(tx_data, &tx_drive_status, MODEL_CAR_NET_DRIVE_STATUS_LENGTH);
+
+	  // CAN 캔 버스 고속도로로 전송 메시지 쏘기
+	  tx_header.StdId = MODEL_CAR_NET_DRIVE_STATUS_FRAME_ID;
+	  tx_header.RTR = CAN_RTR_DATA;
+	  tx_header.IDE = CAN_ID_STD;
+	  tx_header.DLC = MODEL_CAR_NET_DRIVE_STATUS_LENGTH;
+	  tx_header.TransmitGlobalTime = DISABLE;
+
+	  HAL_CAN_AddTxMessage(&hcan1, &tx_header, tx_data, &tx_mailbox);
+
+	  /* 4. 루프 주기 동기화 및 타임아웃 누적 (10ms 주기 가정) */
+	  HAL_Delay(10);
+	  if (!is_emergency_active) {
+		  supervisor_wd_timer += 10; // 10ms씩 타이머 누적
+	  }
     /* USER CODE BEGIN 3 */
-  }
-  /* USER CODE END 3 */
-}
 
+  /* USER CODE END 3 */
+  }
+}
 /**
   * @brief System Clock Configuration
   * @retval None
@@ -461,7 +520,77 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+double calculate_actual_rpm(int16_t left_counts, int16_t right_counts)
+{
+    // 두 바퀴의 평균 펄스 변화량
+    double avg_counts = (double)(left_counts + right_counts) / 2.0;
 
+    /* [RPM 계산 가이드라인]
+     * JBG37-520 모터의 감속비가 예를 들어 1:30이고 홀센서가 한 바퀴에 11펄스를 뿜는다면,
+     * 4체배 시 바퀴 1회전당 총 펄스(PPR) = 11 * 4 * 30 = 1320 펄스입니다.
+     * 10ms(0.01초) 주기로 셈하므로: RPM = (avg_counts / 1320) * (60초 / 0.01초)
+     */
+    double ppr = 1320.0; // 팀의 모터 상세 스펙에 맞춰 수정 가능
+    double actual_rpm = (avg_counts / ppr) * 6000.0;
+
+    return actual_rpm;
+}
+
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
+{
+	// can 메시지 잡기
+	if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rx_header, rx_data) != HAL_OK){
+		return;
+	}
+
+	// 1. 최우선순위: 비상 정지 (0x010)
+	if(rx_header.StdId == MODEL_CAR_NET_HMI_EMERGENCY_FRAME_ID){
+		model_car_net_hmi_emergency_unpack(NULL, rx_data, rx_header.DLC);
+
+		// 비상 정지 플래그 활성화 및 하드웨어 즉각 차단
+		is_emergency_active = true;
+		__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); // 왼쪽 모터 정지
+		__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); // 오른쪽 모터 정지
+		return;
+	}
+
+	// 2. 제어기 생존 신호 (0x050) 감지
+	if (rx_header.StdId == MODEL_CAR_NET_HEARTBEAT_FRAME_ID){
+		model_car_net_heartbeat_unpack(&rx_heartbeat, rx_data, rx_header.DLC);
+
+		// Alive_Counter 값이 정상적으로 변하고 있다면 중앙 제어기가 살아있다고 판단
+		if(rx_heartbeat.alive_counter != last_alive_counter){
+			supervisor_wd_timer = 0;
+			last_alive_counter = rx_heartbeat.alive_counter;
+		}
+		return;
+	}
+
+	// 3. 일반 주행 명령 신호 (0x100) 수신 처리
+	if (rx_header.StdId == MODEL_CAR_NET_HEARTBEAT_FRAME_ID){
+		model_car_net_drive_cmd_unpack(&rx_drive_cmd, rx_data, rx_header.DLC);
+		// 물리 주소 범위 검증 후 하드웨어 적용 (예외 처리)
+		if (model_car_net_drive_cmd_target_velocity_is_in_range(rx_drive_cmd.target_velocity)) {
+			/* * [모터 속도 제어 로직 기술 부하 부분]
+			 * 물리 RPM 수치를 PWM 듀티비(0~999)로 환산하는 알고리즘을 거쳐 적용합니다.
+			 * 기어 상태(rx_drive_cmd.gear_status)가 Drive(1)일 때만 모터를 구동하는 인터록 적용.
+			 */
+			if (rx_drive_cmd.gear_status == 1) { // Drive 모드
+				// 간단 매핑 예시 (실제 제어 시 PID 제어 알고리즘이나 변환식 적용 필요)
+				uint32_t duty_cycle = (rx_drive_cmd.target_velocity * 999) / 3000;
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, duty_cycle);
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, duty_cycle);
+			} else {
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
+			}
+		}
+		/* [조향 제어 로직 기술 부하 부분]
+		 * rx_drive_cmd.steering_angle (-135 ~ 135도) 값을
+		 * 조향 서보모터용 PWM 타이머 비교 레지스터 값으로 매핑하여 서보 축을 꺾어줍니다.
+		 */
+	}
+}
 /* USER CODE END 4 */
 
 /**
