@@ -132,54 +132,12 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-	  tx_drive_status.drive_motor_current = 0; // 실제로는 안쓰지만 dbc 구조 유지용
-	  /* 1. 절충안 세이프티: 하트비트(사령탑) 두절 감시 (300ms 초과 시) */
-	  if (supervisor_wd_timer >= 300) {
-		  is_emergency_active = true;
-		  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); // 좌측 모터 차단
-		  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); // 우측 모터 차단
-		  // 필요 시 비상 정지 상태임을 알리는 로그를 출력하거나 디버그 LED 점등
-	  }
 
-	  /* 2. 실제 바퀴 RPM 측정 (엔코더 타이머 값 파싱) */
-	  // 4체배 모드이므로 한 주기 동안 변화한 펄스 카운트를 받아 RPM 계산 공식 대입
-	  left_encoder_count = (int16_t)__HAL_TIM_GET_COUNTER(&htim2);
-	  right_encoder_count = (int16_t)__HAL_TIM_GET_COUNTER(&htim3);
-
-	  // 카운터 레지스터 클리어 (다음 주기의 변화량을 알기 위함)
-	  __HAL_TIM_SET_COUNTER(&htim2, 0);
-	  __HAL_TIM_SET_COUNTER(&htim3, 0);
-
-	  // 두 전륜 바퀴의 평균 회전 속도 계산 (예시 물리식)
-	  current_rpm = calculate_actual_rpm(left_encoder_count, right_encoder_count);
-
-	  /* 3. 사령탑(D3-G)으로 데이터 주기 보고 (Drive_Status 0x200 브로드캐스트) */
-	  tx_drive_status.current_velocity = model_car_net_drive_status_current_velocity_encode(current_rpm);
-	  //tx_drive_status.drive_motor_current = get_motor_current_ma(); // INA226 센서 값 매핑
-	  tx_drive_status.current_gear_status = rx_drive_cmd.gear_status; // 기어 상태 에코백 피드백
-
-	  // 라이브러리를 사용해 8바이트 데이터 필드 일렬 패킹 수행
-	  model_car_net_drive_status_pack(tx_data, &tx_drive_status, MODEL_CAR_NET_DRIVE_STATUS_LENGTH);
-
-	  // CAN 캔 버스 고속도로로 전송 메시지 쏘기
-	  tx_header.StdId = MODEL_CAR_NET_DRIVE_STATUS_FRAME_ID;
-	  tx_header.RTR = CAN_RTR_DATA;
-	  tx_header.IDE = CAN_ID_STD;
-	  tx_header.DLC = MODEL_CAR_NET_DRIVE_STATUS_LENGTH;
-	  tx_header.TransmitGlobalTime = DISABLE;
-
-	  HAL_CAN_AddTxMessage(&hcan1, &tx_header, tx_data, &tx_mailbox);
-
-	  /* 4. 루프 주기 동기화 및 타임아웃 누적 (10ms 주기 가정) */
-	  HAL_Delay(10);
-	  if (!is_emergency_active) {
-		  supervisor_wd_timer += 10; // 10ms씩 타이머 누적
-	  }
     /* USER CODE BEGIN 3 */
 
   /* USER CODE END 3 */
-  }
 }
+
 /**
   * @brief System Clock Configuration
   * @retval None
@@ -567,28 +525,54 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 	}
 
 	// 3. 일반 주행 명령 신호 (0x100) 수신 처리
-	if (rx_header.StdId == MODEL_CAR_NET_HEARTBEAT_FRAME_ID){
+	if (rx_header.StdId == MODEL_CAR_NET_HEARTBEAT_FRAME_ID && !is_emergency_active){
 		model_car_net_drive_cmd_unpack(&rx_drive_cmd, rx_data, rx_header.DLC);
+
 		// 물리 주소 범위 검증 후 하드웨어 적용 (예외 처리)
-		if (model_car_net_drive_cmd_target_velocity_is_in_range(rx_drive_cmd.target_velocity)) {
-			/* * [모터 속도 제어 로직 기술 부하 부분]
-			 * 물리 RPM 수치를 PWM 듀티비(0~999)로 환산하는 알고리즘을 거쳐 적용합니다.
-			 * 기어 상태(rx_drive_cmd.gear_status)가 Drive(1)일 때만 모터를 구동하는 인터록 적용.
-			 */
-			if (rx_drive_cmd.gear_status == 1) { // Drive 모드
-				// 간단 매핑 예시 (실제 제어 시 PID 제어 알고리즘이나 변환식 적용 필요)
-				uint32_t duty_cycle = (rx_drive_cmd.target_velocity * 999) / 3000;
-				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, duty_cycle);
-				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, duty_cycle);
-			} else {
+		if (model_car_net_drive_cmd_target_velocity_is_in_range(rx_drive_cmd.target_velocity)){
+			if(rx_drive_cmd.gear_status == 1){
+				// (1) 브레이크 깊이 (0~100%) 반영하여 베이스 속도 결정 (전기차식 감속)
+				double brake_factor = (100.0 - (double)rx_drive_cmd.brake_depth) / 100.0;
+				double v_base = (double)rx_drive_cmd.target_velocity * brake_factor;
+
+				// (2) 조향각에 따른 좌우 속도차(차동 조향) 계산
+				// 조향 가중치 K값은 주행 테스트를 하며 최적의 값을 찾아 고정합니다. (예시: 0.5)
+				double K = 0.5;
+				double v_steer = (double)rx_drive_cmd.steering_angle * K;
+
+				// (3) 최종 좌/우 바퀴의 목표 RPM 계산
+				double target_left_rpm  = v_base + v_steer;
+				double target_right_rpm = v_base - v_steer;
+
+				// 4. 브레이크가 100% 일 때는 무조건 0으로 멈춤
+				if (rx_drive_cmd.brake_depth >= 100) {
+					target_left_rpm = 0;
+					target_right_rpm = 0;
+					// TODO: 모터 드라이버 제어 핀(GPIO)을 제어해 Short Brake 모드 발동 코드 추가 가능
+				}
+
+				// 5. 계산된 RPM 수치를 TIM1 PWM 듀티비(0~999)로 변환하여 모터 가동
+				// (주의: 역회전이나 음수 RPM 처리를 위해 원래는 방향 제어 핀(DIR) 제어가 동반되어야 합니다.)
+				if (target_left_rpm < 0) target_left_rpm = 0;      // 음수 방지 예외처리
+				if (target_right_rpm < 0) target_right_rpm = 0;
+
+				uint32_t left_duty  = ((uint32_t)target_left_rpm * 999) / 3000;
+				uint32_t right_duty = ((uint32_t)target_right_rpm * 999) / 3000;
+
+				// 리미터 걸어주기 (999 최대치 방어)
+				if (left_duty > 999) left_duty = 999;
+				if (right_duty > 999) right_duty = 999;
+
+				// 하드웨어 타이머 레지스터에 최종 투하!
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, left_duty);  // 왼쪽 앞바퀴 PWM
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, right_duty); // 오른쪽 앞바퀴 PWM
+
+			} else{
+				// 기어가 D가 아니면 무조건 정지
 				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
 				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
 			}
 		}
-		/* [조향 제어 로직 기술 부하 부분]
-		 * rx_drive_cmd.steering_angle (-135 ~ 135도) 값을
-		 * 조향 서보모터용 PWM 타이머 비교 레지스터 값으로 매핑하여 서보 축을 꺾어줍니다.
-		 */
 	}
 }
 /* USER CODE END 4 */
