@@ -53,6 +53,8 @@ UART_HandleTypeDef huart2;
 struct model_car_net_drive_cmd_t rx_drive_cmd;       // 수신된 주행 명령 저장용
 struct model_car_net_drive_status_t tx_drive_status; // 송신할 구동 상태 저장용
 struct model_car_net_heartbeat_t rx_heartbeat;       // 수신된 하트비트 저장용
+struct model_car_net_gear_status_t rx_gear_status;   // 0x070 기어 상태 추가
+struct model_car_net_safe_abort_t rx_safe_abort;     // 0x010 세이프 어보트 확장
 
 /* CAN 송수신 하드웨어 핸들러 및 헤더 */
 CAN_RxHeaderTypeDef rx_header;
@@ -65,6 +67,7 @@ uint32_t tx_mailbox;
 uint32_t supervisor_wd_timer = 0; // 하트비트 무응답 시간 누적용 (ms 단위 카운트)
 uint8_t last_alive_counter = 0;   // 이전 하트비트 카운트 값 백업
 bool is_emergency_active = false; // 현재 비상 정지 상태 여부 플래그
+uint8_t current_gear = 0;         // 0=P, 1=D, 2=R 로컬 백업용
 
 /* 엔코더 측정 및 속도 계산 변수 */
 int16_t left_encoder_count = 0;
@@ -134,7 +137,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
+  }
   /* USER CODE END 3 */
 }
 
@@ -459,6 +462,9 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2|GPIO_PIN_10|GPIO_PIN_4|GPIO_PIN_5, GPIO_PIN_RESET);
+
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
@@ -471,6 +477,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB2 PB10 PB4 PB5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_10|GPIO_PIN_4|GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -501,74 +514,107 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 		return;
 	}
 
-	// 1. 최우선순위: 비상 정지 (0x010)
-	if(rx_header.StdId == MODEL_CAR_NET_HMI_EMERGENCY_FRAME_ID){
-		model_car_net_hmi_emergency_unpack(NULL, rx_data, rx_header.DLC);
+	/* ====================================================================
+	 * 1. 최우선순위 안전 대역: 비상 정지 (0x010 SafeAbort) ─ 확장 반영
+	 * ==================================================================== */
+	if (rx_header.StdId == MODEL_CAR_NET_SAFE_ABORT_FRAME_ID) {
+		model_car_net_safe_abort_unpack(&rx_safe_abort, rx_data, rx_header.DLC);
 
-		// 비상 정지 플래그 활성화 및 하드웨어 즉각 차단
-		is_emergency_active = true;
-		__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); // 왼쪽 모터 정지
-		__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); // 오른쪽 모터 정지
+		if (rx_safe_abort.stop_flag == 1) {
+			is_emergency_active = true;
+
+			// 전원 차단 및 Short Brake용 방향 핀 HIGH 락 발동
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET);   // IN1 = HIGH
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_SET);   // IN2 = HIGH
+			HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_SET);  // IN3 = HIGH
+			HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);  // IN4 = HIGH
+
+			__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); // 왼쪽 모터 정지 (PWMA)
+			__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); // 오른쪽 모터 정지 (PWMB)
+		}
 		return;
 	}
 
-	// 2. 제어기 생존 신호 (0x050) 감지
-	if (rx_header.StdId == MODEL_CAR_NET_HEARTBEAT_FRAME_ID){
+	/* ====================================================================
+	 * 2. 안전 대역: 제어기 생존 신호 (0x050 Heartbeat)
+	 * ==================================================================== */
+	if (rx_header.StdId == MODEL_CAR_NET_HEARTBEAT_FRAME_ID) {
 		model_car_net_heartbeat_unpack(&rx_heartbeat, rx_data, rx_header.DLC);
 
-		// Alive_Counter 값이 정상적으로 변하고 있다면 중앙 제어기가 살아있다고 판단
-		if(rx_heartbeat.alive_counter != last_alive_counter){
-			supervisor_wd_timer = 0;
+		if (rx_heartbeat.alive_counter != last_alive_counter) {
+			supervisor_wd_timer = 0; // 와치독 카운터 리셋
 			last_alive_counter = rx_heartbeat.alive_counter;
 		}
 		return;
 	}
 
-	// 3. 일반 주행 명령 신호 (0x100) 수신 처리
-	if (rx_header.StdId == MODEL_CAR_NET_HEARTBEAT_FRAME_ID && !is_emergency_active){
+	/* ====================================================================
+	 * 3. 안전 대역: 신규 기어 상태 수신 (0x070 GearStatus)
+	 * ==================================================================== */
+	if (rx_header.StdId == MODEL_CAR_NET_GEAR_STATUS_FRAME_ID) {
+		model_car_net_gear_status_unpack(&rx_gear_status, rx_data, rx_header.DLC);
+		current_gear = rx_gear_status.gear; // 0=P, 1=D, 2=R 전역 동기화
+		return;
+	}
+
+	/* ====================================================================
+	 * 4. 명령 대역: 일반 주행 명령 신호 (0x100 Drive_Cmd) ─ 판정 버그 수정 완료
+	 * ==================================================================== */
+	if (rx_header.StdId == MODEL_CAR_NET_DRIVE_CMD_FRAME_ID && !is_emergency_active) {
 		model_car_net_drive_cmd_unpack(&rx_drive_cmd, rx_data, rx_header.DLC);
 
-		// 물리 주소 범위 검증 후 하드웨어 적용 (예외 처리)
-		if (model_car_net_drive_cmd_target_velocity_is_in_range(rx_drive_cmd.target_velocity)){
-			if(rx_drive_cmd.gear_status == 1){
-				// (1) 브레이크 깊이 (0~100%) 반영하여 베이스 속도 결정 (전기차식 감속)
+		// 물리 범위 검증
+		if (model_car_net_drive_cmd_target_velocity_is_in_range(rx_drive_cmd.target_velocity)) {
+
+			// 분리된 독립 0x070 기어 상태 변수(current_gear)를 인터록으로 사용합니다.
+			if (current_gear == 1) { // 1 = Drive(D)
+
+				// (1) 브레이크 깊이 반영 베이스 속도 연산
 				double brake_factor = (100.0 - (double)rx_drive_cmd.brake_depth) / 100.0;
 				double v_base = (double)rx_drive_cmd.target_velocity * brake_factor;
 
-				// (2) 조향각에 따른 좌우 속도차(차동 조향) 계산
-				// 조향 가중치 K값은 주행 테스트를 하며 최적의 값을 찾아 고정합니다. (예시: 0.5)
+				// (2) 차동 조향(좌우 속도차) 연산
 				double K = 0.5;
 				double v_steer = (double)rx_drive_cmd.steering_angle * K;
 
-				// (3) 최종 좌/우 바퀴의 목표 RPM 계산
+				// (3) 좌/우 바퀴 최종 목표 RPM 산출 (왼쪽 음수/오른쪽 양수 부호 법칙)
 				double target_left_rpm  = v_base + v_steer;
 				double target_right_rpm = v_base - v_steer;
 
-				// 4. 브레이크가 100% 일 때는 무조건 0으로 멈춤
+				// (4) 브레이크 100% 만땅 예외 처리
 				if (rx_drive_cmd.brake_depth >= 100) {
 					target_left_rpm = 0;
 					target_right_rpm = 0;
-					// TODO: 모터 드라이버 제어 핀(GPIO)을 제어해 Short Brake 모드 발동 코드 추가 가능
 				}
 
-				// 5. 계산된 RPM 수치를 TIM1 PWM 듀티비(0~999)로 변환하여 모터 가동
-				// (주의: 역회전이나 음수 RPM 처리를 위해 원래는 방향 제어 핀(DIR) 제어가 동반되어야 합니다.)
-				if (target_left_rpm < 0) target_left_rpm = 0;      // 음수 방지 예외처리
+				// 음수 방지 가드 레일
+				if (target_left_rpm < 0)  target_left_rpm = 0;
 				if (target_right_rpm < 0) target_right_rpm = 0;
 
+				// (5) 물리 RPM 값을 20kHz TIM1 PWM 레지스터 해상도(0~999)로 스케일 매핑
 				uint32_t left_duty  = ((uint32_t)target_left_rpm * 999) / 3000;
 				uint32_t right_duty = ((uint32_t)target_right_rpm * 999) / 3000;
 
-				// 리미터 걸어주기 (999 최대치 방어)
-				if (left_duty > 999) left_duty = 999;
+				if (left_duty > 999)  left_duty = 999;
 				if (right_duty > 999) right_duty = 999;
 
-				// 하드웨어 타이머 레지스터에 최종 투하!
-				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, left_duty);  // 왼쪽 앞바퀴 PWM
-				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, right_duty); // 오른쪽 앞바퀴 PWM
+				// 모터 드라이버 L298N에 전진 방향 인가 (IN1=1, IN2=0 / IN3=1, IN4=0)
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET);   // IN1 = HIGH
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_RESET); // IN2 = LOW
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_SET);  // IN3 = HIGH
+				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_RESET); // IN4 = LOW
 
-			} else{
-				// 기어가 D가 아니면 무조건 정지
+				// 최종 레지스터 하드웨어 투하
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, left_duty);  // PWMA
+				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, right_duty); // PWMB
+
+			} else {
+				// D기어가 아니거나 주차(P) 모드일 경우 모터 정지 및 축 잠금
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_SET);
+				HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_SET);
+
 				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
 				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
 			}
