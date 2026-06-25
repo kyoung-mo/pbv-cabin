@@ -63,6 +63,11 @@ uint8_t rx_data[8];
 uint8_t tx_data[8];
 uint32_t tx_mailbox;
 
+/* 하드웨어 테스트용 CAN 송신 변수 */
+CAN_TxHeaderTypeDef test_tx_header;
+uint8_t test_tx_data[8];
+uint32_t test_mailbox;
+
 /* 세이프티 및 페일세이프 관련 변수 */
 uint32_t supervisor_wd_timer = 0; // 하트비트 무응답 시간 누적용 (ms 단위 카운트)
 uint8_t last_alive_counter = 0;   // 이전 하트비트 카운트 값 백업
@@ -127,7 +132,55 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
+  /* ====================================================================
+ * 1. CAN 하드웨어 활성화 및 필터 마스터 세팅 (PCAN-View 통신 개통용)
+ * ==================================================================== */
 
+
+// 모든 CAN ID를 필터링 없이 다 받아들이는 '마스터 오픈 필터' 설정
+CAN_FilterTypeDef canFilter;
+canFilter.FilterBank = 0;
+canFilter.FilterMode = CAN_FILTERMODE_IDMASK;
+canFilter.FilterScale = CAN_FILTERSCALE_32BIT;
+canFilter.FilterIdHigh = 0x0000;
+canFilter.FilterIdLow = 0x0000;
+canFilter.FilterMaskIdHigh = 0x0000;
+canFilter.FilterMaskIdLow = 0x0000;
+canFilter.FilterFIFOAssignment = CAN_RX_FIFO0;
+canFilter.FilterActivation = ENABLE;
+canFilter.SlaveStartFilterBank = 14;
+
+if (HAL_CAN_ConfigFilter(&hcan1, &canFilter) != HAL_OK) {
+	Error_Handler(); // 필터 설정 실패 시 잠금
+}
+
+// CAN 외장 하드웨어 선로 전격 개통! (이게 켜져야 PCAN Receive가 뚫립니다)
+if (HAL_CAN_Start(&hcan1) != HAL_OK) {
+	Error_Handler();
+}
+
+// CAN 수신 인터럽트(FIFO0 Pending) 활성화
+if (HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK) {
+	Error_Handler();
+}
+
+// 송신 헤더 설정
+//tx_header.StdId = 0x102; // F446용 테스트 ID
+//tx_header.RTR = CAN_RTR_DATA;
+//tx_header.IDE = CAN_ID_STD;
+//tx_header.DLC = 8;
+//tx_header.TransmitGlobalTime = DISABLE;
+
+/* ====================================================================
+ * 2. 타이머 하드웨어 기동 (좌/우 모터 및 엔코더 작동 시작)
+ * ==================================================================== */
+// (1) TIM1 PWM 출력 채널 가동 (모터 속도 제어선 활성화)
+HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1); // PA8 (PWMA)
+HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2); // PA9 (PWMB)
+
+// (2) TIM2, TIM3 엔코더 카운터 하드웨어 감시 기동
+HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL); // 왼쪽 바퀴 엔코더 감시 시작
+HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL); // 오른쪽 바퀴 엔코더 감시 시작
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -137,6 +190,31 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+//	  // 1. 테스트용 CAN 메시지 헤더 설정 (Drive_Status ID: 0x200)
+//	      test_tx_header.StdId = 0x200;           // 16진수 ID 200h로 송신
+//	      test_tx_header.RTR = CAN_RTR_DATA;      // 데이터 프레임
+//	      test_tx_header.IDE = CAN_ID_STD;        // 표준 ID (11비트)
+//	      test_tx_header.DLC = 8;                 // 8바이트 데이터 꽉 채움
+//	      test_tx_header.TransmitGlobalTime = DISABLE;
+//
+//	      // 2. 더미 데이터 채우기 (확인하기 쉽게 0xAA, 0xBB 등으로 채웁니다)
+//	      test_tx_data[0] = 0xAA;
+//	      test_tx_data[1] = 0xBB;
+//	      test_tx_data[2] = 0xCC;
+//	      test_tx_data[3] = 0xDD;
+//	      test_tx_data[4] = 0x11;
+//	      test_tx_data[5] = 0x22;
+//	      test_tx_data[6] = 0x33;
+//	      test_tx_data[7] = 0x44;
+//
+//	      // 3. CAN 버스에 강제로 메시지 쏘기!
+//	      // 하드웨어 사정상 사서함(Mailbox)이 비어있을 때만 신호를 밀어 넣습니다.
+//	      if (HAL_CAN_GetTxMailboxesFreeLevel(&hcan1) > 0) {
+//	          HAL_CAN_AddTxMessage(&hcan1, &test_tx_header, test_tx_data, &test_mailbox);
+//	      }
+//
+//	      // 4. 1초(1000ms) 동안 대기하며 무한 반복
+//	      HAL_Delay(1000);
   }
   /* USER CODE END 3 */
 }
@@ -460,7 +538,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LD2_Pin|GPIO_PIN_10, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2|GPIO_PIN_10|GPIO_PIN_4|GPIO_PIN_5, GPIO_PIN_RESET);
@@ -471,12 +549,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;
+  /*Configure GPIO pins : LD2_Pin PA10 */
+  GPIO_InitStruct.Pin = LD2_Pin|GPIO_PIN_10;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB2 PB10 PB4 PB5 */
   GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_10|GPIO_PIN_4|GPIO_PIN_5;
@@ -513,6 +591,8 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 	if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rx_header, rx_data) != HAL_OK){
 		return;
 	}
+	// can 신호 들어오면 무조건 ld2 on
+	HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
 
 	/* ====================================================================
 	 * 1. 최우선순위 안전 대역: 비상 정지 (0x010 SafeAbort) ─ 확장 반영
