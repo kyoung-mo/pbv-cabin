@@ -49,6 +49,8 @@ QtObject {
     readonly property real camDistance: 1050        // ACTIVE(왼쪽 40%) 시 카메라 거리(클수록 멀리/작게)
                                                     //   차+의자가 화면에 꽉 차면 ↑ 로 멀리서
     readonly property real camDistanceAmbient: 820  // AMBIENT(전체화면) 시 카메라 거리 — 가까이=차 크게
+    readonly property real camAmbientPanX: 75       // AMBIENT 시 카메라 가로 패닝(+면 차량이 화면 왼쪽으로)
+                                                     //   전체화면에서 차가 오른쪽 치우치면 이 값으로 중앙 정렬
     readonly property real camPitch:    -32         // 부감 각도(X, 내려다봄)
     readonly property real camYaw:      -28         // 3/4 각도(Y)
     readonly property real camFov:      55          // 시야각(FOV)

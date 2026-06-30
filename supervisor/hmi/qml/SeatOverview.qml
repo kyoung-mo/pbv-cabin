@@ -47,7 +47,7 @@ Item {
                 anchors.margins: 12
                 height: 34
                 radius: Theme.radiusSm
-                color: "#1effffff"
+                color: Theme.border                  // 옅은 회색 헤더 띠(라이트)
                 Text {
                     anchors.centerIn: parent
                     text: "▲  앞 (FRONT)"
@@ -88,8 +88,9 @@ Item {
                         radius: Theme.radiusLg
                         highlighted: isSel || hov.hovered
                         pressed: ma.pressed
-                        fillTop:    isSel ? "#553b82f6" : "#33222d44"
-                        fillBottom: isSel ? "#403b82f6" : "#33161d2c"
+                        // 선택=옅은 블루 틴트 / 평소=흰·옅은 회색 카드
+                        fillTop:    isSel ? "#ffe6efff" : Theme.surfaceTop
+                        fillBottom: isSel ? "#ffd9e6ff" : Theme.surfaceBottom
                         Behavior on fillTop    { ColorAnimation { duration: Theme.durMed } }
                         Behavior on fillBottom { ColorAnimation { duration: Theme.durMed } }
 
@@ -105,7 +106,7 @@ Item {
                                 width: parent.width * 0.74
                                 height: parent.height * 0.20
                                 radius: Theme.radiusSm
-                                color: tile.isSel ? Theme.accent : "#46506a"
+                                color: tile.isSel ? Theme.accent : "#ff7c8696"   // 평소=살짝 진한 회색
                                 Behavior on color { ColorAnimation { duration: Theme.durMed } }
                             }
                             // 쿠션(아래 큰 면)
@@ -116,7 +117,7 @@ Item {
                                 width: parent.width * 0.82
                                 height: parent.height * 0.46
                                 radius: Theme.radiusSm
-                                color: tile.isSel ? Theme.accentSoft : "#525d79"
+                                color: tile.isSel ? Theme.accentSoft : "#ff9aa3b2"  // 평소=중간 회색
                                 Behavior on color { ColorAnimation { duration: Theme.durMed } }
 
                                 // 스티어링 휠 힌트(운전석만)

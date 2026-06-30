@@ -25,6 +25,9 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 radius: Theme.radius
+                // 풀블리드 사진의 사각 코너가 둥근 모서리 밖으로 삐져나오지 않게 살짝 들임
+                // (radius 비례 → radius 바꿔도 자동으로 맞음).
+                contentInset: Math.round(Theme.radius * 0.4)
 
                 // 선택 = accent 글로우, 누름 = 눌림 피드백
                 highlighted: vehicleState.cabinMode === modelData.name
@@ -58,7 +61,7 @@ Item {
                     anchors.bottom: parent.bottom
                     anchors.margins: Theme.spaceLg
                     text: modelData.name
-                    color: Theme.textPrimary
+                    color: "#ffffff"                 // 사진 위 흰 글자(스크림으로 가독성 확보)
                     font.pixelSize: Theme.fsHero
                     font.bold: true
                     font.letterSpacing: Theme.tracking

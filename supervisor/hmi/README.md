@@ -61,7 +61,7 @@ Slot 내부만 바꾸면 되고 QML/화면 로직은 그대로 둔다.
 |---|---|---|---|---|---|---|
 | 주행 | `drive.png` | Open highway road desert Arizona | (미상) | CC0 1.0 (Public Domain Dedication) | rawpixel | https://www.rawpixel.com/image/3292687/free-photo-image-asphalt-cc0-creative-commons |
 | 회의 | `meeting.png` | conference room table chairs | (미상) | CC0 1.0 (Public Domain Dedication) | rawpixel | https://www.rawpixel.com/image/3337630/free-photo-image-boardroom-conference-office-background |
-| Full-space | `fullspace.png` | Interior back seat shot man | (미상) | CC0 1.0 (Public Domain Dedication) | rawpixel | https://www.rawpixel.com/image/3300411/free-photo-image-retro-car-drive-steering-wheel |
+| Full-space | `fullspace.png` | Dodge Grand Caravan (RT) with 4x8 foot plywood inside (뒷좌석 접은 트렁크 적재공간) | CZmarlin — Christopher Ziemnowicz | CC0 1.0 (Public Domain Dedication) | wikimedia | https://commons.wikimedia.org/w/index.php?curid=157179039 |
 | 휴식 | `rest.png` | Milky Way and starry night sky | naturenps | Public Domain Mark 1.0 | flickr | https://www.flickr.com/photos/130826934@N07/26972689115 |
 
 > 라이선스가 CC0/PD가 아닌 이미지는 사용하지 않음. 교체 시에도 동일 기준 유지.

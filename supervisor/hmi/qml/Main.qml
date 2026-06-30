@@ -23,8 +23,10 @@ ApplicationWindow {
     Shortcut { sequence: "Esc"; onActivated: Qt.quit() }
 
     // Row 대신 절대배치 — 폭/위치를 개별 애니메이션해 부드럽게 전환한다.
+    // 콘텐츠 영역 — 하단 내비바 높이만큼 비워, 패널/3D가 바에 가리지 않게 한다.
     Item {
         anchors.fill: parent
+        anchors.bottomMargin: Theme.navHeight
 
         // 왼쪽 차량 3D: ACTIVE 40% → AMBIENT 전체 폭.
         LeftCar {
@@ -59,5 +61,11 @@ ApplicationWindow {
                 }
             }
         }
+    }
+
+    // 하단 내비게이션 바 — 화면 하단 가로 전체. 콘텐츠 위(z-order 최상단)에 고정.
+    NavBar {
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        height: Theme.navHeight
     }
 }

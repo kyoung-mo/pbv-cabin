@@ -37,8 +37,8 @@ Item {
         width: gearRow.width + 36
         height: gearRow.height + 18
         radius: height / 2
-        color: "#cc11151e"
-        border.color: Theme.borderStrong
+        color: Theme.overlayPillBg
+        border.color: Theme.overlayBorder
         border.width: 1
 
         Row {
@@ -48,14 +48,14 @@ Item {
             Text {
                 anchors.baseline: gearVal.baseline
                 text: "GEAR"
-                color: Theme.textSecondary
+                color: Theme.overlayTextSecondary
                 font.pixelSize: 22
                 font.letterSpacing: 2
             }
             Text {
                 id: gearVal
                 text: vehicleState.gear
-                color: Theme.textPrimary
+                color: Theme.overlayTextPrimary
                 font.pixelSize: 38
                 font.bold: true
                 font.letterSpacing: Theme.tracking

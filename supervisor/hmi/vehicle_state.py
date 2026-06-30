@@ -109,12 +109,13 @@ class VehicleState(QObject):
         self._tween_timer.setInterval(TWEEN_INTERVAL_MS)
         self._tween_timer.timeout.connect(self._on_tween_tick)
 
-        # 화면 상태 + 무입력(앰비언트) 타이머. 기본 ACTIVE, 10초 무입력 시 AMBIENT.
-        self._ui_mode = "ACTIVE"
+        # 화면 상태 + 무입력(앰비언트) 타이머. 기본 AMBIENT(켜면 바로 대기 화면).
+        # 타이머는 ACTIVE 일 때만 의미가 있으므로 여기선 무장하지 않는다.
+        # (차량 터치 → wakeFromAmbient → _register_activity 에서 타이머 시작)
+        self._ui_mode = "AMBIENT"
         self._idle_timer = QTimer(self)
         self._idle_timer.setSingleShot(True)        # start()마다 카운트다운 재시작
         self._idle_timer.timeout.connect(self._on_idle_timeout)
-        self._idle_timer.start(IDLE_TIMEOUT_MS)
 
     # =====================================================================
     # gear
@@ -267,6 +268,25 @@ class VehicleState(QObject):
         """AMBIENT에서 차량 화면 터치 → ACTIVE 복귀 + 타이머 재시작.
         (기어 조작은 이 경로를 안 써서 대기 유지. 레이아웃 전환은 다음 단계.)"""
         self._register_activity()
+
+    # ── 하단 내비게이션 바 지름길 ──────────────────────────────────────
+    @Slot()
+    def goAmbient(self):
+        """홈 버튼 — 대기(AMBIENT) 모드로 즉시 전환. (타이머와 무관: 입력 아님)"""
+        self._idle_timer.stop()
+        self._set_ui_mode("AMBIENT")
+
+    @Slot()
+    def goSeats(self):
+        """좌석 버튼 — ACTIVE + 좌석 선택(SEAT_OVERVIEW). (입력 → 타이머 리셋)"""
+        self._register_activity()          # AMBIENT면 ACTIVE 복귀 + 타이머 재시작
+        self._set_screen("SEAT_OVERVIEW")
+
+    @Slot()
+    def goModes(self):
+        """모드 버튼 — ACTIVE + 모드 선택(MODE_SELECT). (입력 → 타이머 리셋)"""
+        self._register_activity()
+        self._set_screen("MODE_SELECT")
 
     def _on_idle_timeout(self):
         """10초 무입력 경과. 기어 P 일 때만 AMBIENT 진입(주행/후진 중 대기 방지)."""

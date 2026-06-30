@@ -7,11 +7,14 @@ import "."
 Item {
     id: root
 
-    // 글래스 트랙 배경
+    // 글래스 트랙 배경 — 왼쪽 3D 위 다크 오버레이로 유지(라이트 패널과 분리).
     Card {
         anchors.fill: parent
         radius: Theme.radius
         elevation: 0.7
+        fillTop: Theme.overlaySurfaceTop
+        fillBottom: Theme.overlaySurfaceBottom
+        borderColor: Theme.overlayBorder
     }
 
     Slider {
@@ -46,7 +49,7 @@ Item {
             width: 6
             height: gearSlider.availableHeight
             radius: 3
-            color: Theme.borderStrong
+            color: Theme.overlayBorder
         }
 
         // 핸들 — 글래스 캡슐. 스냅 시 부드럽게 미끄러짐(드래그 중엔 즉시).
@@ -102,18 +105,18 @@ Item {
         anchors.right: parent.right; anchors.rightMargin: Theme.spaceMd
         anchors.top: parent.top; anchors.topMargin: Theme.spaceSm
         text: "D"
-        color: vehicleState.gear === "D" ? Theme.accentSoft : Theme.textMuted
+        color: vehicleState.gear === "D" ? Theme.accentSoft : Theme.overlayTextMuted
     }
     GearLabel {
         anchors.right: parent.right; anchors.rightMargin: Theme.spaceMd
         anchors.verticalCenter: parent.verticalCenter
         text: "P"
-        color: vehicleState.gear === "P" ? Theme.accentSoft : Theme.textMuted
+        color: vehicleState.gear === "P" ? Theme.accentSoft : Theme.overlayTextMuted
     }
     GearLabel {
         anchors.right: parent.right; anchors.rightMargin: Theme.spaceMd
         anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.spaceSm
         text: "R"
-        color: vehicleState.gear === "R" ? Theme.accentSoft : Theme.textMuted
+        color: vehicleState.gear === "R" ? Theme.accentSoft : Theme.overlayTextMuted
     }
 }

@@ -177,26 +177,27 @@ def gen_seat_overview(w=600, h=620):
 
 
 def gen_seat_side(w=600, h=360):
-    img = vgrad(w, h, (40, 46, 62), (22, 26, 36))
+    # 라이트 톤: 옅은 회색 배경 + 중간 회색 좌석(오른쪽 패널 라이트 팔레트와 통일).
+    img = vgrad(w, h, (244, 245, 247), (232, 234, 238))
     d = ImageDraw.Draw(img, "RGBA")
     cx, cy = int(w * 0.5), int(h * 0.78)
-    # 바닥 그림자
+    # 바닥 그림자 (라이트 배경 위 아주 부드럽게)
     sh = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    ImageDraw.Draw(sh).ellipse([cx - 170, cy + 20, cx + 190, cy + 70], fill=(0, 0, 0, 120))
+    ImageDraw.Draw(sh).ellipse([cx - 170, cy + 20, cx + 190, cy + 70], fill=(0, 0, 0, 45))
     img.alpha_composite(sh.filter(ImageFilter.GaussianBlur(12)))
-    # 시트 쿠션
-    rrect(d, [cx - 150, cy - 10, cx + 120, cy + 34], 18, (74, 92, 128))
-    rrect(d, [cx - 150, cy - 4, cx + 120, cy + 24], 14, (96, 118, 160))
-    # 등받이
+    # 시트 쿠션 (중간 회색 #9aa3b2 계열 / 윗면 살짝 밝게)
+    rrect(d, [cx - 150, cy - 10, cx + 120, cy + 34], 18, (124, 134, 150))
+    rrect(d, [cx - 150, cy - 4, cx + 120, cy + 24], 14, (154, 163, 178))
+    # 등받이 (살짝 진한 회색 #7c8696 계열)
     d.polygon([(cx - 150, cy - 6), (cx - 96, cy - 6),
-               (cx - 60, cy - 180), (cx - 120, cy - 176)], fill=(86, 106, 146))
+               (cx - 60, cy - 180), (cx - 120, cy - 176)], fill=(110, 120, 138))
     d.polygon([(cx - 144, cy - 8), (cx - 104, cy - 8),
-               (cx - 70, cy - 172), (cx - 116, cy - 168)], fill=(108, 132, 178))
+               (cx - 70, cy - 172), (cx - 116, cy - 168)], fill=(140, 150, 166))
     # 헤드레스트
-    rrect(d, [cx - 132, cy - 210, cx - 78, cy - 168], 14, (96, 118, 160))
+    rrect(d, [cx - 132, cy - 210, cx - 78, cy - 168], 14, (140, 150, 166))
     # 다리/베이스
-    rrect(d, [cx - 120, cy + 30, cx - 96, cy + 56], 6, (50, 58, 76))
-    rrect(d, [cx + 80, cy + 30, cx + 104, cy + 56], 6, (50, 58, 76))
+    rrect(d, [cx - 120, cy + 30, cx - 96, cy + 56], 6, (150, 156, 168))
+    rrect(d, [cx + 80, cy + 30, cx + 104, cy + 56], 6, (150, 156, 168))
     img.save(os.path.join(ASSETS, "seats", "seat.png"))
     print("seats: side")
 

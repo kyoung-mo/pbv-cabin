@@ -13,11 +13,13 @@ View3D {
     // ── 차 겉껍데기 X-ray 트리거 ──────────────────────────────────
     // 좌석이 하나라도 이동(보간) 중이거나, 좌석 디테일(SEAT_DETAIL) 화면이면
     // GLB 차체(White 메시)를 반투명으로 페이드 → 안의 바닥+의자+레일이 비쳐 보인다.
+    // ※ 단, ACTIVE 화면에서만. AMBIENT(대기)는 완성된 차를 보여주는 상태라 항상 불투명.
     readonly property bool anySeatMoving:
         vehicleState.seatMoving["driver"] || vehicleState.seatMoving["passenger"]
         || vehicleState.seatMoving["rear_left"] || vehicleState.seatMoving["rear_right"]
     readonly property bool xrayActive:
-        anySeatMoving || vehicleState.rightPanelScreen === "SEAT_DETAIL"
+        vehicleState.uiMode === "ACTIVE"
+        && (anySeatMoving || vehicleState.rightPanelScreen === "SEAT_DETAIL")
     // 실제로 차체에 먹이는 불투명도(부드럽게 페이드). 평소 1.0 → X-ray 시 Cfg.carXrayOpacity.
     property real carShellOpacity: xrayActive ? Cfg.carXrayOpacity : 1.0
     Behavior on carShellOpacity {
@@ -33,6 +35,11 @@ View3D {
     property real camZ: vehicleState.uiMode === "AMBIENT" ? Cfg.camDistanceAmbient
                                                           : Cfg.camDistance
     Behavior on camZ {
+        NumberAnimation { duration: Cfg.ambientTransitionMs; easing.type: Easing.InOutQuad }
+    }
+    // ── 카메라 가로 패닝: AMBIENT 전체화면에서 차량을 가로 중앙으로(카메라 로컬 X 이동) ──
+    property real camPanX: vehicleState.uiMode === "AMBIENT" ? Cfg.camAmbientPanX : 0
+    Behavior on camPanX {
         NumberAnimation { duration: Cfg.ambientTransitionMs; easing.type: Easing.InOutQuad }
     }
 
@@ -51,6 +58,7 @@ View3D {
 
         PerspectiveCamera {
             id: camera
+            x: view.camPanX                          // 화면 가로 패닝(카메라 로컬 X)
             z: view.camZ
             fieldOfView: Cfg.camFov
             clipNear: 10

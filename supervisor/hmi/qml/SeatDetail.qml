@@ -30,8 +30,8 @@ Item {
                 padding: 0
                 background: Card {
                     radius: Theme.radiusSm
-                    fillTop: backBtn.pressed ? "#33ffffff" : Theme.surfaceTop
-                    fillBottom: backBtn.pressed ? "#22ffffff" : Theme.surfaceBottom
+                    fillTop: backBtn.pressed ? "#14000000" : Theme.surfaceTop
+                    fillBottom: backBtn.pressed ? "#0a000000" : Theme.surfaceBottom
                     pressed: backBtn.pressed
                     implicitWidth: 140
                     implicitHeight: 56
@@ -61,8 +61,9 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: 230
             radius: Theme.radiusLg
-            fillTop: vehicleState.curIsFront ? "#33273450" : "#33222d40"
-            fillBottom: "#33141a28"
+            // 앞좌석은 살짝 푸른 틴트, 뒷좌석은 흰 카드 — 둘 다 라이트
+            fillTop: vehicleState.curIsFront ? "#ffeaf1fc" : Theme.surfaceTop
+            fillBottom: Theme.surfaceBottom
 
             Image {
                 anchors.fill: parent
