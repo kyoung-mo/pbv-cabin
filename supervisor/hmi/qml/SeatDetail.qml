@@ -1,0 +1,129 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import "."
+
+// SEAT_DETAIL: 선택된 좌석 1개를 크게 표시 + 슬라이더 2개.
+//   앞좌석(운전석/조수석): 리클라인 0~180 + 회전 0~180
+//   뒷좌석(좌/우)        : 리클라인 0~180 + 슬라이드 0~100
+// 슬라이더 value는 vehicleState의 현재좌석 Property에 binding으로 초기화되므로
+// (Loader 재생성 시) 저장된 값이 그대로 복원된다.
+Item {
+    id: root
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: Theme.spaceLg
+        spacing: Theme.spaceLg
+
+        // 상단: 뒤로 버튼 + 좌석명
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Theme.spaceMd
+
+            // 글래스 "뒤로" 버튼
+            Button {
+                id: backBtn
+                text: "←  뒤로"
+                font.pixelSize: Theme.fsLabel
+                font.bold: true
+                padding: 0
+                background: Card {
+                    radius: Theme.radiusSm
+                    fillTop: backBtn.pressed ? "#33ffffff" : Theme.surfaceTop
+                    fillBottom: backBtn.pressed ? "#22ffffff" : Theme.surfaceBottom
+                    pressed: backBtn.pressed
+                    implicitWidth: 140
+                    implicitHeight: 56
+                }
+                contentItem: Text {
+                    text: backBtn.text
+                    color: Theme.textPrimary
+                    font: backBtn.font
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                onClicked: vehicleState.backToOverview()
+            }
+            Text {
+                Layout.fillWidth: true
+                Layout.leftMargin: Theme.spaceSm
+                text: vehicleState.curSeatLabel
+                color: Theme.textPrimary
+                font.pixelSize: Theme.fsTitle
+                font.bold: true
+                font.letterSpacing: Theme.tracking
+            }
+        }
+
+        // 좌석 큰 박스 — 글래스 카드 + 실사풍 좌석 일러스트
+        Card {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 230
+            radius: Theme.radiusLg
+            fillTop: vehicleState.curIsFront ? "#33273450" : "#33222d40"
+            fillBottom: "#33141a28"
+
+            Image {
+                anchors.fill: parent
+                anchors.margins: Theme.spaceSm
+                source: "../assets/seats/seat.png"
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+            }
+            Text {
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: Theme.spaceMd
+                text: vehicleState.curSeatLabel
+                color: Theme.textPrimary
+                font.pixelSize: Theme.fsHero
+                font.bold: true
+                font.letterSpacing: Theme.tracking
+                opacity: 0.92
+            }
+        }
+
+        // --- 리클라인: 슬라이더(목표값) + "적용" 버튼 ---
+        // 슬라이더는 target 만 정하고, "적용"을 눌러야 3D가 목표까지 서서히 움직인다.
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Theme.spaceMd
+            SeatAxisRow {
+                Layout.fillWidth: true
+                label: "리클라인"
+                unit: "0~180 · 90=직립"
+                value: vehicleState.curReclineTarget
+                to: 180
+                onMovedTo: function (v) { vehicleState.setReclineTarget(v) }
+            }
+            ApplyButton {
+                Layout.alignment: Qt.AlignVCenter
+                dirty: vehicleState.curReclineDirty
+                onClicked: vehicleState.applyRecline()
+            }
+        }
+
+        // --- 축2 (앞=회전 0~180 / 뒤=슬라이드 0~100) + "적용" 버튼 ---
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Theme.spaceMd
+            SeatAxisRow {
+                Layout.fillWidth: true
+                label: vehicleState.curAxis2Name
+                unit: "0~" + vehicleState.curAxis2Max
+                value: vehicleState.curAxis2Target
+                to: vehicleState.curAxis2Max
+                onMovedTo: function (v) { vehicleState.setAxis2Target(v) }
+            }
+            ApplyButton {
+                Layout.alignment: Qt.AlignVCenter
+                dirty: vehicleState.curAxis2Dirty
+                onClicked: vehicleState.applyAxis2()
+            }
+        }
+
+        // 아래 여백
+        Item { Layout.fillHeight: true }
+    }
+}
