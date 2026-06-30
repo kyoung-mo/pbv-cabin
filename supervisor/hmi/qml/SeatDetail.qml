@@ -56,6 +56,40 @@ Item {
             }
         }
 
+        // 끼임 경고 배너 — 현재 선택 좌석의 Pinch_Detected 수신 시.
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 48
+            visible: vehicleState.seatPinch[vehicleState.selectedSeat] === true
+            radius: Theme.radiusSm
+            color: "#1aff3b30"
+            border.color: "#ff3b30"
+            border.width: 1
+            Row {
+                anchors.centerIn: parent
+                spacing: 10
+                Text {
+                    text: "⚠"
+                    color: "#ff3b30"
+                    font.pixelSize: Theme.fsLabel + 4
+                    font.bold: true
+                    SequentialAnimation on opacity {
+                        running: parent.parent.visible
+                        loops: Animation.Infinite
+                        NumberAnimation { from: 1.0; to: 0.3; duration: 450 }
+                        NumberAnimation { from: 0.3; to: 1.0; duration: 450 }
+                    }
+                }
+                Text {
+                    text: "끼임 감지 — 안전을 위해 동작이 정지될 수 있습니다"
+                    color: Theme.textPrimary
+                    font.pixelSize: Theme.fsLabel
+                    font.bold: true
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+        }
+
         // 좌석 큰 박스 — 글래스 카드 + 실사풍 좌석 일러스트
         Card {
             Layout.fillWidth: true

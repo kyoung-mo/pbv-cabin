@@ -26,14 +26,18 @@ Node {
 
     // 이동 표시(보간 중 하이라이트) — Cabin3D 에서 vehicleState.seatMoving + Cfg 주입.
     property bool moving: false           // 이 좌석이 목표까지 이동(보간) 중인가
+    property bool pinch: false            // 끼임(Pinch_Detected) 수신 — 빨간 경고 글로우
     property bool showIndicator: true     // 표시 on/off (Cfg.showMoveIndicator)
-    property color glowColor: "#3B82F6"   // 하이라이트 색
-    property real glow: (moving && showIndicator) ? 1.0 : 0.0
+    property color glowColor: "#3B82F6"   // 하이라이트 색(이동)
+    // 끼임이면 빨강·강조, 아니면 이동 시 파랑.
+    property real glow: pinch ? 1.0 : ((moving && showIndicator) ? 1.0 : 0.0)
+    readonly property color effGlowColor: pinch ? "#ff3b30" : glowColor
     Behavior on glow { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
-    // 이동 중이면 클레이 표면에 은은한 emissive 글로우(과하지 않게 0.6 스케일).
-    readonly property vector3d glowVec: Qt.vector3d(glowColor.r * glow * 0.6,
-                                                    glowColor.g * glow * 0.6,
-                                                    glowColor.b * glow * 0.6)
+    // 이동/끼임 시 클레이 표면에 emissive 글로우. 끼임은 더 강하게(0.9), 이동은 0.6.
+    readonly property real glowScale: pinch ? 0.9 : 0.6
+    readonly property vector3d glowVec: Qt.vector3d(effGlowColor.r * glow * glowScale,
+                                                    effGlowColor.g * glow * glowScale,
+                                                    effGlowColor.b * glow * glowScale)
 
     // --- axis2 → 변환값 ---
     readonly property real rotateDeg: isRear ? 0 : axis2         // 앞: Y축 회전(deg)

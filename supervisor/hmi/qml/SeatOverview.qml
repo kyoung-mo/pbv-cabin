@@ -143,6 +143,32 @@ Item {
                             }
                         }
 
+                        // 끼임 경고 배지 — Seat_Status.*_Pinch_Detected 수신 시.
+                        Rectangle {
+                            visible: vehicleState.seatPinch[tile.modelData.sid] === true
+                            anchors { top: parent.top; right: parent.right; margins: 8 }
+                            width: pinchTxt.width + 18
+                            height: pinchTxt.height + 10
+                            radius: height / 2
+                            color: "#ff3b30"
+                            z: 5
+                            // 깜빡임으로 주의 환기
+                            SequentialAnimation on opacity {
+                                running: parent.visible
+                                loops: Animation.Infinite
+                                NumberAnimation { from: 1.0; to: 0.35; duration: 450 }
+                                NumberAnimation { from: 0.35; to: 1.0; duration: 450 }
+                            }
+                            Text {
+                                id: pinchTxt
+                                anchors.centerIn: parent
+                                text: "⚠ 끼임"
+                                color: "white"
+                                font.pixelSize: Theme.fsLabel - 4
+                                font.bold: true
+                            }
+                        }
+
                         HoverHandler { id: hov }
                         MouseArea {
                             id: ma

@@ -115,6 +115,7 @@ View3D {
             recline: vehicleState.seatPose["driver"].recline
             axis2: vehicleState.seatPose["driver"].axis2
             moving: vehicleState.seatMoving["driver"]
+            pinch: vehicleState.seatPinch["driver"]
             showIndicator: Cfg.showMoveIndicator
             glowColor: Cfg.moveGlowColor
         }
@@ -125,6 +126,7 @@ View3D {
             recline: vehicleState.seatPose["passenger"].recline
             axis2: vehicleState.seatPose["passenger"].axis2
             moving: vehicleState.seatMoving["passenger"]
+            pinch: vehicleState.seatPinch["passenger"]
             showIndicator: Cfg.showMoveIndicator
             glowColor: Cfg.moveGlowColor
         }
@@ -135,6 +137,7 @@ View3D {
             recline: vehicleState.seatPose["rear_left"].recline
             axis2: vehicleState.seatPose["rear_left"].axis2
             moving: vehicleState.seatMoving["rear_left"]
+            pinch: vehicleState.seatPinch["rear_left"]
             showIndicator: Cfg.showMoveIndicator
             glowColor: Cfg.moveGlowColor
         }
@@ -145,6 +148,7 @@ View3D {
             recline: vehicleState.seatPose["rear_right"].recline
             axis2: vehicleState.seatPose["rear_right"].axis2
             moving: vehicleState.seatMoving["rear_right"]
+            pinch: vehicleState.seatPinch["rear_right"]
             showIndicator: Cfg.showMoveIndicator
             glowColor: Cfg.moveGlowColor
         }

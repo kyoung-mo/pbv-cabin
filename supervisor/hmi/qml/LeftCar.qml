@@ -60,6 +60,120 @@ Item {
                 font.bold: true
                 font.letterSpacing: Theme.tracking
             }
+            // 현재 속도 — Drive_Status.Current_Velocity 수신 반영(주행 중에만 노출).
+            Text {
+                anchors.baseline: gearVal.baseline
+                visible: vehicleState.currentVelocity > 0
+                text: vehicleState.currentVelocity.toFixed(1) + " RPM"
+                color: Theme.overlayTextSecondary
+                font.pixelSize: 22
+                font.letterSpacing: 1
+            }
+        }
+    }
+
+    // ── 레이싱휠 실시간 표시 (상단 중앙) — 인터록과 무관하게 항상 따라옴(문서 §5.2) ──
+    //   조향각 게이지(중앙 0, 좌/우 ±130°) + 엑셀/브레이크 막대. 휠 스레드 → onWheelInput.
+    Rectangle {
+        id: steerHud
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.top: parent.top
+        anchors.topMargin: 16
+        width: 280
+        height: 84
+        radius: 16
+        color: Theme.overlayPillBg
+        border.color: Theme.overlayBorder
+        border.width: 1
+
+        Column {
+            anchors.centerIn: parent
+            spacing: 8
+            width: parent.width - 28
+
+            // 상단: "조향" + 각도값
+            Row {
+                width: parent.width
+                Text {
+                    text: "조향"
+                    color: Theme.overlayTextSecondary
+                    font.pixelSize: 16
+                    font.letterSpacing: 2
+                }
+                Item { width: parent.width - steerLbl.width - steerDeg.width; height: 1 }
+                Text {
+                    id: steerLbl
+                    visible: false
+                    text: "조향"
+                    font.pixelSize: 16
+                }
+                Text {
+                    id: steerDeg
+                    text: vehicleState.wheelSteering + "°"
+                    color: Theme.overlayTextPrimary
+                    font.pixelSize: 18
+                    font.bold: true
+                }
+            }
+
+            // 조향 게이지 — 중앙 0, 인디케이터가 좌우로 이동
+            Rectangle {
+                id: track
+                width: parent.width
+                height: 10
+                radius: 5
+                color: "#33000000"
+                // 중앙 눈금
+                Rectangle {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: 2; height: parent.height + 6
+                    y: -3
+                    color: Theme.overlayTextSecondary
+                    opacity: 0.6
+                }
+                // 인디케이터 (조향 비율만큼 중앙에서 이동, ±130° 풀스케일)
+                Rectangle {
+                    width: 18; height: 18; radius: 9
+                    color: Theme.accent
+                    y: (parent.height - height) / 2
+                    x: (parent.width - width) / 2
+                        + Math.max(-1, Math.min(1, vehicleState.wheelSteering / 130))
+                          * (parent.width - width) / 2
+                    Behavior on x { NumberAnimation { duration: 60 } }
+                }
+            }
+
+            // 하단: 엑셀(초록)/브레이크(빨강) 막대
+            Row {
+                width: parent.width
+                spacing: 8
+                Row {
+                    spacing: 4
+                    Text { text: "A"; color: "#34c759"; font.pixelSize: 13; font.bold: true }
+                    Rectangle {
+                        width: 96; height: 8; radius: 4; color: "#33000000"
+                        anchors.verticalCenter: parent.verticalCenter
+                        Rectangle {
+                            width: parent.width * Math.max(0, Math.min(1, vehicleState.wheelThrottle / 100))
+                            height: parent.height; radius: 4; color: "#34c759"
+                            Behavior on width { NumberAnimation { duration: 60 } }
+                        }
+                    }
+                }
+                Row {
+                    spacing: 4
+                    Text { text: "B"; color: "#ff3b30"; font.pixelSize: 13; font.bold: true }
+                    Rectangle {
+                        width: 96; height: 8; radius: 4; color: "#33000000"
+                        anchors.verticalCenter: parent.verticalCenter
+                        Rectangle {
+                            width: parent.width * Math.max(0, Math.min(1, vehicleState.wheelBrake / 100))
+                            height: parent.height; radius: 4; color: "#ff3b30"
+                            Behavior on width { NumberAnimation { duration: 60 } }
+                        }
+                    }
+                }
+            }
         }
     }
 

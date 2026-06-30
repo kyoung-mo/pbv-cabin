@@ -1,8 +1,12 @@
 """VehicleState — 차량 HMI의 단일 상태 객체 (single source of truth).
 
-이 단계(스텝1)에서는 실제 CAN 송신을 하지 않는다.
-모든 "CAN으로 보낼 자리"는 print()로 무엇을 보낼지만 콘솔에 출력한다.
-QML은 이 객체의 Property에 binding으로만 그리며, 입력은 @Slot setter만 호출한다.
+스텝2: 실제 can0 양방향 연동.
+  · 입력(슬라이더/모드/적용/기어) → 안전 인터록 통과 시에만 CanHub 로 encode→send.
+  · 디지털 트윈의 "현재 recline 포즈"는 로컬 트윈이 아니라 **수신한 Seat_Status**로만
+    갱신한다(onSeatStatus). 더미 ECU(또는 실물 ECU)가 보내는 Curr_*_Recline 을 따라간다.
+      └ 단, 회전/슬라이드(axis2)는 DBC 에 Status 피드백이 없어 로컬 트윈으로 시각화한다.
+  · QML은 이 객체의 Property에 binding으로만 그리며, 입력은 @Slot setter만 호출한다.
+  · CanHub 가 None(셀프테스트/CAN 미연결)이면 송신부는 콘솔 출력으로 폴백한다.
 """
 
 from PySide6.QtCore import QObject, Signal, Property, Slot, QTimer
@@ -75,9 +79,14 @@ class VehicleState(QObject):
     seatValuesChanged = Signal()  # 현재 선택 좌석의 각도값이 바뀜
     seatMovingChanged = Signal()  # 좌석의 이동(보간) 상태 집합이 바뀜
     uiModeChanged = Signal()      # 화면 상태(ACTIVE/AMBIENT) 전환
+    pinchChanged = Signal()       # 좌석 끼임(Pinch_Detected) 집합이 바뀜
+    driveStatusChanged = Signal() # Drive_Status(현재속도 등) 수신 반영
+    wheelInputChanged = Signal()  # 레이싱휠 조향/페달 실시간 입력(화면 표시용)
 
-    def __init__(self, parent=None):
+    def __init__(self, can_hub=None, parent=None):
         super().__init__(parent)
+        # CAN 송신 허브(없으면 콘솔 폴백). RX 시그널은 main 에서 onSeatStatus 등에 연결.
+        self._can = can_hub
         self._gear = "P"
         self._cabin_mode = ""                  # 아직 미선택
         self._right_panel_screen = "MODE_SELECT"
@@ -89,10 +98,16 @@ class VehicleState(QObject):
         #   · 3D 캐빈은 current 에 바인딩한다.
         #   recline: 0~180 (90=직립/정상착좌, 180=완전 뒤로 눕기, 0=앞으로 폴딩)
         #   axis2  : 앞좌석=회전 0~180, 뒷좌석=슬라이드 0~100
+        #   recline 은 "commanded"(마지막으로 CAN 송신한 목표)를 따로 둔다 — 트윈이 아니라
+        #   수신 Status 로 current 가 commanded 까지 따라오는 동안을 "이동중"으로 본다.
+        #   axis2 도 commanded 를 둔다: 앞좌석 회전은 이제 Curr_*_Rotate 피드백이 있어
+        #   closed-loop(트윈X, status 추종) — 뒷좌석 슬라이드는 피드백이 없어 open-loop(트윈).
         def _axes(recline, axis2):
             return {
-                "recline": {"target": recline, "current": recline},
-                "axis2":   {"target": axis2,   "current": axis2},
+                "recline": {"target": recline, "current": recline,
+                            "commanded": recline},
+                "axis2":   {"target": axis2,   "current": axis2,
+                            "commanded": axis2},
             }
         # 앞좌석 axis2=회전(기본 0=정면). 뒷좌석 axis2=슬라이드(기본 30=여유 있는 정상
         # 착좌 위치; 0으로 당기면 앞쪽 최대 full-space, 100이면 뒤쪽 최대).
@@ -102,6 +117,15 @@ class VehicleState(QObject):
             "rear_left":  _axes(90, 30),
             "rear_right": _axes(90, 30),
         }
+
+        # 좌석별 끼임 경고(Seat_Status.*_Pinch_Detected 수신 반영)
+        self._pinch = {seat: False for seat in SEAT_LABELS}
+        # Drive_Status 반영(현재 속도 RPM)
+        self._current_velocity = 0.0
+        # 레이싱휠 실시간 입력(화면 표시용) — 인터록과 무관하게 항상 갱신
+        self._wheel_steer = 0      # 조향각(도, -130~130)
+        self._wheel_throttle = 0   # 엑셀(%)
+        self._wheel_brake = 0      # 브레이크(%)
 
         # 적용 트윈 엔진 — 단일 QTimer 로 여러 축(seat,axis)을 동시에 보간.
         self._tweens = {}   # (seat, axis) -> {"start", "target", "elapsed"}
@@ -151,6 +175,9 @@ class VehicleState(QObject):
             return
         self._gear = target
         print(f"GEAR: {self._gear}")
+        # GearStatus 브로드캐스트(Drive/Front/Rear ECU 가 인터록 판단에 사용).
+        if self._can:
+            self._can.send_gear_status(GEARS.index(self._gear))
         self.gearChanged.emit()
 
     @Slot()
@@ -390,11 +417,121 @@ class VehicleState(QObject):
     # --- 3D 캐빈이 구독하는 좌석별 "이동(보간) 중" 상태 맵 (목표 4: 시각 피드백) ---
     def _get_seat_moving(self):
         moving = {seat: False for seat in SEAT_LABELS}
+        # 뒷좌석 슬라이드(open-loop) 로컬 트윈 진행 중
         for (seat, _axis) in self._tweens:
             moving[seat] = True
+        # closed-loop 축: 송신한 commanded 까지 수신 current 가 아직 도달 못함 = 이동중
+        #   recline(전 좌석) + 앞좌석 회전(axis2)
+        for seat, ax in self._seat_values.items():
+            if ax["recline"]["current"] != ax["recline"]["commanded"]:
+                moving[seat] = True
+            if self._axis2_closed_loop(seat) and \
+                    ax["axis2"]["current"] != ax["axis2"]["commanded"]:
+                moving[seat] = True
         return moving
 
     seatMoving = Property("QVariantMap", _get_seat_moving, notify=seatMovingChanged)
+
+    # =====================================================================
+    # CAN 수신 → 디지털 트윈 갱신 (RX 스레드에서 QueuedConnection 으로 호출됨 = GUI 스레드 안전)
+    # =====================================================================
+    @Slot(str, int, int, bool)
+    def onSeatStatus(self, seat, recline, rotate, pinch):
+        """*_Seat_Status 수신 → 디지털 트윈 현재포즈 + 끼임 경고를 GUI 에 반영.
+
+        · recline           : 전 좌석 closed-loop — current ← Curr_*_Recline.
+        · rotate(앞좌석만)  : closed-loop — axis2.current ← Curr_*_Rotate. (rotate<0=피드백 없음)
+        · 뒷좌석 슬라이드    : 피드백 없음 → 여기서 건드리지 않음(open-loop 트윈 유지).
+
+        ※ CanHub.seatStatusReceived 에 QueuedConnection 으로 연결 → 반드시 GUI 스레드 실행.
+           RX 스레드가 직접 Property 를 건드리지 않는다(스레드 안전).
+        """
+        if seat not in self._seat_values:
+            return
+        changed = False
+        r = self._seat_values[seat]["recline"]
+        if r["current"] != recline:
+            r["current"] = recline
+            changed = True
+        # 앞좌석 회전 closed-loop 반영(rotate>=0 일 때만; 뒷좌석은 -1)
+        if rotate >= 0 and self._axis2_closed_loop(seat):
+            a = self._seat_values[seat]["axis2"]
+            if a["current"] != rotate:
+                a["current"] = rotate
+                changed = True
+        if changed:
+            self.seatValuesChanged.emit()   # 3D 트윈(seatPose)·dirty 갱신
+            self.seatMovingChanged.emit()   # commanded 도달 여부(이동중) 갱신
+        if self._pinch.get(seat) != bool(pinch):
+            self._pinch[seat] = bool(pinch)
+            if pinch:
+                print(f"PINCH: {SEAT_LABELS[seat]} 끼임 감지!")
+            self.pinchChanged.emit()
+
+    # --- 레이싱휠 → 화면 즉각 반영 (인터록과 무관, 항상) ---
+    @Slot(int, int, int)
+    def onWheelInput(self, steering_deg, throttle, brake):
+        """휠 스레드(WheelInput.wheelInput)에서 QueuedConnection 으로 호출 = GUI 스레드 안전.
+
+        문서 §5.2: 휠을 돌리면 인터록과 무관하게 HMI 조향 표시가 즉각 따라온다.
+        """
+        changed = False
+        if self._wheel_steer != steering_deg:
+            self._wheel_steer = steering_deg
+            changed = True
+        if self._wheel_throttle != throttle:
+            self._wheel_throttle = throttle
+            changed = True
+        if self._wheel_brake != brake:
+            self._wheel_brake = brake
+            changed = True
+        if changed:
+            self.wheelInputChanged.emit()
+
+    @Slot(float, int, int)
+    def onDriveStatus(self, velocity_rpm, motor_mA, gear):
+        """Drive_Status 수신: 현재 속도(RPM)를 HMI 에 반영(GEAR 옆 표시)."""
+        if self._current_velocity != velocity_rpm:
+            self._current_velocity = velocity_rpm
+            self.driveStatusChanged.emit()
+
+    # --- 끼임(Pinch) Property: QML 은 seatPinch[<seat>] 로 바인딩 ---
+    def _get_seat_pinch(self):
+        return dict(self._pinch)
+
+    seatPinch = Property("QVariantMap", _get_seat_pinch, notify=pinchChanged)
+
+    def _get_any_pinch(self):
+        return any(self._pinch.values())
+
+    anyPinch = Property(bool, _get_any_pinch, notify=pinchChanged)
+
+    # --- Drive_Status: 현재 속도(RPM) ---
+    def _get_current_velocity(self):
+        return self._current_velocity
+
+    currentVelocity = Property(float, _get_current_velocity,
+                               notify=driveStatusChanged)
+
+    # --- 레이싱휠 실시간 입력 Property (QML 조향 표시가 바인딩) ---
+    def _get_wheel_steer(self):
+        return self._wheel_steer
+
+    wheelSteering = Property(int, _get_wheel_steer, notify=wheelInputChanged)
+
+    def _get_wheel_throttle(self):
+        return self._wheel_throttle
+
+    wheelThrottle = Property(int, _get_wheel_throttle, notify=wheelInputChanged)
+
+    def _get_wheel_brake(self):
+        return self._wheel_brake
+
+    wheelBrake = Property(int, _get_wheel_brake, notify=wheelInputChanged)
+
+    # --- 휠 스레드가 읽는 주행-가능 인터록 (기어 D/R 진입은 DRIVE_MODE 에서만 허용됨) ---
+    def drive_enabled(self):
+        return self._gear in ("D", "R")
 
     # --- "적용" — 여기서 CAN 송신(현재는 print) + current를 target까지 트윈 ---
     @Slot()
@@ -407,26 +544,71 @@ class VehicleState(QObject):
         self._register_activity()
         self._commit_axis(self._selected_seat, "axis2")
 
-    def _commit_axis(self, seat, axis):
-        """target 확정(= CAN 송신 자리, SEAT_CMD print) + current→target 트윈 시작."""
-        target = self._seat_values[seat][axis]["target"]
-        if axis == "recline":
-            print(f"SEAT_CMD: {SEAT_LABELS[seat]} 리클라인={target}")
+    # --- 안전 인터록: 좌석 Cmd 를 실제로 보내도 되는가 (단방향: 입력→인터록→CAN) ---
+    def _seat_cmd_approved(self, seat):
+        """주행/후진(기어 D/R) 중에는 좌석 액추에이터 명령 금지. reject 시 송신 안 함."""
+        if self._gear in ("D", "R"):
+            return False
+        return True
+
+    def _send_seat(self, seat):
+        """선택 좌석의 현재 target(recline + axis2)을 *_Seat_Cmd 로 encode→can0 송신.
+
+        좌석 Cmd 는 한 프레임에 두 축을 모두 싣는다(DBC 구조). CanHub.SEAT_CMD_DEF 가
+        좌석키→메시지/시그널을 매핑한다. CAN 미연결 시 콘솔로 폴백.
+        """
+        recline = self._seat_values[seat]["recline"]["target"]
+        axis2 = self._seat_values[seat]["axis2"]["target"]
+        if self._can:
+            self._can.send_seat_cmd(seat, recline, axis2)
         else:
             name = "회전" if seat in FRONT_SEATS else "슬라이드"
-            print(f"SEAT_CMD: {SEAT_LABELS[seat]} {name}={target}")
-        self._start_tween(seat, axis)
+            print(f"[NO-CAN] SEAT_CMD {SEAT_LABELS[seat]} 리클라인={recline} {name}={axis2}")
+
+    def _axis2_closed_loop(self, seat):
+        """앞좌석 회전 = Curr_*_Rotate 피드백 있음(closed-loop). 뒷좌석 슬라이드 = 없음(open-loop)."""
+        return seat in FRONT_SEATS
+
+    def _mark_commit(self, seat, axis):
+        """송신 후 트윈 시각화 처리. closed-loop 축은 commanded 만 갱신(status 추종),
+        open-loop 축(뒷좌석 슬라이드)은 로컬 트윈 시작."""
+        if axis == "recline" or self._axis2_closed_loop(seat):
+            ax = self._seat_values[seat][axis]
+            ax["commanded"] = ax["target"]      # status 도달 전까지 '이동중'
+        else:
+            self._start_tween(seat, axis)        # 뒷좌석 슬라이드: current==target 이면 no-op
+
+    def _commit_axis(self, seat, axis):
+        """적용: 인터록 통과 시 *_Seat_Cmd 송신. (reject 면 송신/이동 없음)
+
+        좌석 Cmd 는 recline+axis2 를 한 프레임에 모두 싣는다.
+        · recline         : 항상 closed-loop — 수신 Curr_*_Recline 로 current 갱신.
+        · axis2(앞=회전)  : closed-loop — 수신 Curr_*_Rotate 로 current 갱신.
+        · axis2(뒤=슬라이드): open-loop — 피드백 없어 로컬 트윈으로 시각화.
+        """
+        if not self._seat_cmd_approved(seat):
+            print(f"BLOCKED(seat): 주행/후진 중 좌석 변경 거부 ({SEAT_LABELS[seat]})")
+            return
+        self._send_seat(seat)
+        self._mark_commit(seat, axis)
+        self.seatMovingChanged.emit()
 
     def _apply_mode_preset(self, mode):
-        """모드 프리셋 값으로 4개 좌석 target 세팅 후 즉시 적용(트윈). 미포함 좌석/축은 유지."""
+        """모드 프리셋 값으로 4개 좌석 target 세팅 후 즉시 적용. 미포함 좌석/축은 유지."""
         preset = MODE_PRESETS.get(mode)
         if not preset:
             return
         for seat, axes in preset.items():
             for axis, value in axes.items():
                 self._seat_values[seat][axis]["target"] = int(value)
-                self._commit_axis(seat, axis)
+            if not self._seat_cmd_approved(seat):
+                continue
+            # 좌석당 한 번만 송신(두 축 한 프레임). 두 축 모두 커밋 처리.
+            self._send_seat(seat)
+            self._mark_commit(seat, "recline")
+            self._mark_commit(seat, "axis2")
         self.seatValuesChanged.emit()   # SEAT_DETAIL 슬라이더/dirty 즉시 갱신
+        self.seatMovingChanged.emit()
 
     # =====================================================================
     # 적용 트윈 (current → target, 부드러운 ease-in-out)
