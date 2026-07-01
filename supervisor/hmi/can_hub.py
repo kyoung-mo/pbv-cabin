@@ -16,6 +16,7 @@
 
 import os
 import threading
+import time
 
 import can
 import cantools
@@ -91,6 +92,8 @@ class CanHub(QObject):
                                       receive_own_messages=False)
 
         self._send_lock = threading.Lock()
+        self._tx_err_last = 0.0            # busError 스로틀(마지막 방출 시각, monotonic)
+        self._tx_err_count = 0            # 스로틀 창 동안 누적 드롭 수
         self._rolling = 0                  # Driver_Seat_Cmd 의 Rolling_Counter (0~15 순환)
         self._running = False
         self._rx_thread = None
@@ -110,10 +113,31 @@ class CanHub(QObject):
     # 송신 헬퍼 (encode → can0 send)
     # =====================================================================
     def _send(self, frame_id, data):
+        """프레임 1개 송신. 실패해도 예외를 올리지 않고 드롭 후 False 반환.
+
+        ENOBUFS(105) 등 커널 TX 큐 포화는 보통 버스에서 프레임이 ACK 되지 않아(다른 노드
+        부재·종단저항 미설치·비트레이트 불일치) 송신 큐가 안 빠지는 상태다. 좌석/기어/모드
+        프리셋 같은 단발 송신 경로가 여기서 예외를 그대로 올리면 QML 슬롯(selectMode 등)이
+        통째로 죽는다. 주기 브로드캐스트 버스에서는 프레임을 조용히 버리고(다음 틱에 재송신)
+        앱을 살려두는 편이 옳다. 스팸 방지를 위해 busError 는 1초에 한 번만 방출한다.
+        반환: 송신 성공 True / 드롭 False.
+        """
         msg = can.Message(arbitration_id=frame_id, data=bytes(data),
                           is_extended_id=False)
         with self._send_lock:
-            self._bus.send(msg, timeout=0.1)
+            try:
+                self._bus.send(msg, timeout=0.1)
+                return True
+            except (can.CanError, OSError) as e:
+                self._tx_err_count += 1
+                now = time.monotonic()
+                if now - self._tx_err_last >= 1.0:
+                    self.busError.emit(
+                        f"TX 드롭 {self._tx_err_count}건 (최근 frame 0x{frame_id:03X}: {e}) "
+                        "— can0 TX 큐 포화(버스 ACK 부재/종단·비트레이트 확인)")
+                    self._tx_err_last = now
+                    self._tx_err_count = 0
+                return False
 
     def _next_rolling(self):
         v = self._rolling

@@ -23,8 +23,13 @@ SEAT_LABELS = {
 # 앞좌석(리클라인 + 회전) / 뒷좌석(리클라인 + 슬라이드) 구분
 FRONT_SEATS = ("driver", "passenger")
 
-# 기어 슬라이드 인덱스: 아래(0)=R, 중앙(1)=P, 위(2)=D
+# 기어 슬라이드 인덱스(UI 배치): 아래(0)=R, 중앙(1)=P, 위(2)=D
 GEARS = ("R", "P", "D")
+
+# 기어 → CAN GearStatus(0x070) Gear 값 인코딩. ECU 합의: R=0 / P=1(중립,기본) / D=2.
+#   중립(P)=1 을 기준으로 위로 한 칸=D(2, 상한 클램프), 아래로=P(1)→R(0, 하한 클램프).
+#   (GEARS 순서 R-P-D 의 인덱스와 동일 — 슬라이더 위치와 CAN 값이 같은 정렬이 된다.)
+GEAR_CAN_VALUE = {"R": 0, "P": 1, "D": 2}
 
 # 주행(DRIVE) 모드 식별자 — 기어 D/R 진입을 허용하는 유일한 모드
 DRIVE_MODE = "주행"
@@ -167,18 +172,30 @@ class VehicleState(QObject):
             self.gearChanged.emit()
             return
         target = GEARS[idx]
-        # 인터록: D/R로 변경은 "주행 모드 AND 현재 기어 P"일 때만 허용.
-        # (한 칸 이동 규칙상 D/R로 가는 출발점은 항상 P이므로 모드만 확인하면 충분)
+        self._apply_gear(target, source="slider")
+
+    def _apply_gear(self, target, *, source):
+        """기어 상태를 target 으로 전이하고 GearStatus(0x070) 송신 + 화면 동기.
+
+        슬라이더/휠 패들이 공유하는 단일 전이 경로. 인터록(D/R 진입은 주행 모드에서만)만
+        검사하고, 실제 전이가 일어나면 매번 0x070 을 송신하고 gearChanged 를 쏜다.
+        반환: 전이 성공 True / 거부·무변화 False.
+        """
+        if target == self._gear:
+            return False
+        # 인터록: D/R 진입은 주행 모드일 때만 허용. (P 로 복귀는 항상 허용)
         if target in ("D", "R") and self._cabin_mode != DRIVE_MODE:
-            print("BLOCKED: 주행 모드가 아니라 기어 변경 불가")
-            self.gearChanged.emit()  # 슬라이더를 P로 되돌림
-            return
+            print(f"BLOCKED: 주행 모드가 아니라 기어 변경 불가 (src={source})")
+            self.gearChanged.emit()  # 슬라이더를 현재 기어로 되돌림
+            return False
         self._gear = target
-        print(f"GEAR: {self._gear}")
+        gear_idx = GEAR_CAN_VALUE[self._gear]     # CAN 인코딩(P=0/D=1/R=2), 슬라이더 인덱스와 별개
+        print(f"GEAR: {self._gear}  → send GearStatus(0x070) Gear={gear_idx} (src={source})")
         # GearStatus 브로드캐스트(Drive/Front/Rear ECU 가 인터록 판단에 사용).
         if self._can:
-            self._can.send_gear_status(GEARS.index(self._gear))
+            self._can.send_gear_status(gear_idx)
         self.gearChanged.emit()
+        return True
 
     @Slot()
     def gearBlockedNotice(self):
@@ -189,12 +206,24 @@ class VehicleState(QObject):
     def onWheelGearShift(self, delta):
         """레이싱휠 패들(WheelInput.gearShift)에서 QueuedConnection 으로 호출 = GUI 스레드 안전.
 
-        터치 슬라이더와 **같은 기어 상태**를 갱신한다 — requestGearIndex 경로를 그대로 재사용해
-        한 칸 이동(R↔P↔D)·인터록·GearStatus(0x070) 송신·슬라이더 동기를 한곳에서 처리한다.
-        delta: +1=업(R→P→D, GEARS 인덱스 +1), -1=다운(D→P→R, GEARS 인덱스 -1).
+        패들 press 엣지 1회 = 기어 한 칸 전이(GEARS 순서 R-P-D 를 따라 선형 이동, 경계 클램프).
+          · 업(delta>0, btn5)  : R→P→D  (D 에서 더 눌러도 D 유지)
+          · 다운(delta<0, btn4): D→P→R  (R 에서 더 눌러도 R 유지)
+        터치 슬라이더와 동일한 _apply_gear 경로로 인터록·GearStatus(0x070) 송신·슬라이더 동기를
+        한곳에서 처리(P=0/D=1/R=2 인코딩도 _apply_gear 가 담당).
         """
-        cur = GEARS.index(self._gear)
-        self.requestGearIndex(cur + int(delta))
+        step = 1 if int(delta) >= 0 else -1   # +1=업(R→P→D), -1=다운(D→P→R)
+        try:
+            i = GEARS.index(self._gear)
+        except ValueError:
+            i = GEARS.index("P")              # 현재 기어가 목록에 없으면 P 기준
+        j = max(0, min(len(GEARS) - 1, i + step))   # 경계에서 클램프(끝단 넘어가지 않음)
+        target = GEARS[j]
+        if target == self._gear:
+            print(f"WHEEL GEAR: paddle delta={delta} → 끝단({self._gear}) 유지")
+            return
+        print(f"WHEEL GEAR: paddle delta={delta} → {self._gear}→{target}")
+        self._apply_gear(target, source="wheel")
 
     # --- 인터록 파생 상태 (QML이 binding으로 활성/비활성 판단) ---
     def _get_gear_locked(self):
