@@ -8,6 +8,13 @@ import "."
 Item {
     id: root
 
+    // 운전대 표시 회전각(도) — wheelSteering(±127)을 ±135°로 매핑. +면 우회전(시계방향).
+    //   (실제 조향각 방향 그대로. 화면상 반대로 돌면 부호만 뒤집으면 된다.)
+    readonly property real steerVisAngle: {
+        var s = Math.max(-127, Math.min(127, vehicleState.wheelSteering))
+        return s / 127 * 135
+    }
+
     // 3D 캐빈 (영역 전체)
     Cabin3D {
         id: cabin3d
@@ -110,6 +117,41 @@ Item {
                     text: "B"; color: "#ff3b30"
                     font.pixelSize: 15; font.bold: true
                 }
+            }
+        }
+
+        // ── 운전대 모형 ── 실제 조향각(wheelSteering)을 반영해 좌/우로 회전. 12시 초록점=방향.
+        Column {
+            anchors.horizontalCenter: parent.horizontalCenter
+            spacing: 6
+
+            // 조향값(도) — |각| < 3° 데드밴드는 0°, 아니면 L/R + 각도.
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: Math.abs(root.steerVisAngle) < 3
+                      ? "0°"
+                      : (vehicleState.wheelSteering > 0 ? "R " : "L ")
+                        + Math.round(Math.abs(root.steerVisAngle)) + "°"
+                color: Theme.overlayTextPrimary
+                font.pixelSize: 14
+                font.bold: true
+            }
+
+            SteeringWheel {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 96; height: 96
+                angle: root.steerVisAngle
+                rimColor: Theme.overlayTextPrimary
+                spokeColor: Theme.overlayTextSecondary
+            }
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "STEER"
+                color: Theme.overlayTextSecondary
+                font.pixelSize: 13
+                font.letterSpacing: 1
+                font.bold: true
             }
         }
     }
