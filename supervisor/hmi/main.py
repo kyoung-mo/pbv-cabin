@@ -54,6 +54,8 @@ def _make_wheel(can_hub, state):
         wheel = WheelInput(can_hub, state.drive_enabled)
         # 휠 → 화면 즉각 반영(인터록 무관). RX 와 동일하게 QueuedConnection 으로 GUI 스레드에.
         wheel.wheelInput.connect(state.onWheelInput, Qt.QueuedConnection)
+        # 휠 패들 기어 변속 → VehicleState(단일 기어 상태). 터치 슬라이더와 동일 경로.
+        wheel.gearShift.connect(state.onWheelGearShift, Qt.QueuedConnection)
         wheel.start()
         return wheel
     except Exception as e:

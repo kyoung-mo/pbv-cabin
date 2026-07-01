@@ -185,6 +185,17 @@ class VehicleState(QObject):
         """잠긴 기어 슬라이드를 눌렀을 때 QML이 호출 — 사유만 출력."""
         print("BLOCKED: 주행 모드가 아니라 기어 변경 불가")
 
+    @Slot(int)
+    def onWheelGearShift(self, delta):
+        """레이싱휠 패들(WheelInput.gearShift)에서 QueuedConnection 으로 호출 = GUI 스레드 안전.
+
+        터치 슬라이더와 **같은 기어 상태**를 갱신한다 — requestGearIndex 경로를 그대로 재사용해
+        한 칸 이동(R↔P↔D)·인터록·GearStatus(0x070) 송신·슬라이더 동기를 한곳에서 처리한다.
+        delta: +1=업(R→P→D, GEARS 인덱스 +1), -1=다운(D→P→R, GEARS 인덱스 -1).
+        """
+        cur = GEARS.index(self._gear)
+        self.requestGearIndex(cur + int(delta))
+
     # --- 인터록 파생 상태 (QML이 binding으로 활성/비활성 판단) ---
     def _get_gear_locked(self):
         # 주행 모드가 아니면 기어 슬라이드를 P에 고정하고 잠근다.
