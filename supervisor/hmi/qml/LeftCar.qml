@@ -141,8 +141,9 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: 96; height: 96
                 angle: root.steerVisAngle
-                rimColor: Theme.overlayTextPrimary
-                spokeColor: Theme.overlayTextSecondary
+                rimColor: "#111418"                  // 겉 림 = 검은색(실제 운전대 톤)
+                // 가운데(스포크·허브) = 차체 색을 따옴(기본 그레이, tint 켜면 carBodyColor).
+                spokeColor: Cfg.carTint ? Cfg.carBodyColor : "#8c8c8c"
             }
 
             Text {
