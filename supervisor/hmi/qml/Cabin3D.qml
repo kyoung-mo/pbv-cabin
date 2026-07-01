@@ -50,6 +50,23 @@ View3D {
         antialiasingQuality: SceneEnvironment.Medium
     }
 
+    // ── 4바퀴 구르기 각도 누적 ──────────────────────────────────
+    // 엑셀(wheelThrottle%)에 비례해 매 프레임 각도를 쌓는다(frameTime=초 기반 → 프레임률 무관).
+    //   방향: 기어 D=전진(+) / R=후진(−). running 이 P·엑셀0 을 배제 → 그때는 각도 유지(정지, Pi 절약).
+    FrameAnimation {
+        id: wheelRoll
+        property real angle: 0
+        running: vehicleState.gear !== "P" && vehicleState.wheelThrottle > 0
+        onTriggered: {
+            var dir = vehicleState.gear === "R" ? -1 : 1     // running 이 P 를 이미 배제
+            var thr = Math.max(0, Math.min(100, vehicleState.wheelThrottle)) / 100
+            var d = dir * thr * Cfg.wheelRollMaxDps * frameTime
+            angle += Cfg.wheelRollInvert ? -d : d
+            if (angle > 100000 || angle < -100000)           // float 누적 폭주 방지(360 배수로 접기)
+                angle = angle % 360
+        }
+    }
+
     // ── 카메라 리그 ── 원점을 바라보는 orbit 리그. 3/4 부감 "고정"(상수=Cfg).
     Node {
         id: cameraRig
@@ -112,6 +129,9 @@ View3D {
             Behavior on steerDeg {
                 NumberAnimation { duration: Cfg.wheelSteerSmoothMs; easing.type: Easing.OutQuad }
             }
+
+            // ── 4바퀴 구르기 ── 위 FrameAnimation 이 누적한 각도(도)를 그대로 전달(보간 X, raw).
+            rollDeg: wheelRoll.angle
         }
 
         // ── 뒷좌석 슬라이드 레일 (바닥 고정) ──

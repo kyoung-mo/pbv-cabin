@@ -19,6 +19,11 @@ Node {
     //     반드시 position=pivot(=중심) 으로 둘을 같게 걸어 0°일 때 변위 0 → 지금 보이는 상태 유지.
     property real steerDeg: 0
 
+    // 4바퀴 구르기 각도(도, 누적). Cabin3D 의 FrameAnimation 이 엑셀·기어로 계속 누적해 넣는다.
+    // 구르기 = 차축(X축) 회전. 조향(Y)과 축이 달라 안 섞인다. 앞바퀴는 조향 노드 "안"에서 구른다.
+    //   중심(pivot=position=ctr)은 조향과 동일 → 0°에서 변위 0, 제자리에서만 데굴데굴 구른다.
+    property real rollDeg: 0
+
     // Resources
     PrincipledMaterial {
         id: white_material
@@ -91,40 +96,63 @@ Node {
                 black_material,
                 grey_material
             ]
-        }
-        Model {
-            id: sportsCar2_FrontLeftWheel_Cylinder_017
-            objectName: "SportsCar2_FrontLeftWheel_Cylinder.017"
-            source: "meshes/sportsCar2_FrontLeftWheel_Cylinder_017_mesh.mesh"
-            materials: [
-                grey_material,
-                black_material
-            ]
-            // 메시 AABB 중심(런타임 bounds에서 자동 계산 — 실측 좌표 하드코딩 불필요).
-            // position=pivot=중심 → 조향 0°에서 변위 0(안 사라짐), Y축으로만 제자리 회전.
+            // 뒷바퀴 2개가 한 메시 → AABB 중심은 뒤차축 중점(축선 위).
+            // 그 중심 기준 X축(차축) 회전이면 두 바퀴 다 제자리에서 굴러간다. 조향 없음.
             readonly property vector3d ctr: Qt.vector3d(
                 (bounds.minimum.x + bounds.maximum.x) / 2,
                 (bounds.minimum.y + bounds.maximum.y) / 2,
                 (bounds.minimum.z + bounds.maximum.z) / 2)
             position: ctr
             pivot: ctr
-            eulerRotation.y: node.steerDeg
+            eulerRotation.x: node.rollDeg
         }
-        Model {
-            id: sportsCar2_FrontRightWheel_Cylinder_018
-            objectName: "SportsCar2_FrontRightWheel_Cylinder.018"
-            source: "meshes/sportsCar2_FrontRightWheel_Cylinder_018_mesh.mesh"
-            materials: [
-                grey_material,
-                black_material
-            ]
-            readonly property vector3d ctr: Qt.vector3d(
-                (bounds.minimum.x + bounds.maximum.x) / 2,
-                (bounds.minimum.y + bounds.maximum.y) / 2,
-                (bounds.minimum.z + bounds.maximum.z) / 2)
-            position: ctr
-            pivot: ctr
+        // ── 앞바퀴: 조향(Y) 노드 안에 구르기(X) Model 을 중첩 → 두 회전이 안 섞임 ──
+        //   부모(조향)·자식(구르기) 둘 다 pivot=position=ctr(같은 바퀴중심).
+        //   합성: T(ctr)·Ry(steer)·Rx(roll)·T(-ctr) → 제자리에서 꺾이며 구른다. 0°에서 변위 0.
+        Node {
+            id: frontLeftSteer
+            position: sportsCar2_FrontLeftWheel_Cylinder_017.ctr
+            pivot: sportsCar2_FrontLeftWheel_Cylinder_017.ctr
             eulerRotation.y: node.steerDeg
+            Model {
+                id: sportsCar2_FrontLeftWheel_Cylinder_017
+                objectName: "SportsCar2_FrontLeftWheel_Cylinder.017"
+                source: "meshes/sportsCar2_FrontLeftWheel_Cylinder_017_mesh.mesh"
+                materials: [
+                    grey_material,
+                    black_material
+                ]
+                // 메시 AABB 중심(런타임 bounds에서 자동 계산 — 실측 좌표 하드코딩 불필요).
+                readonly property vector3d ctr: Qt.vector3d(
+                    (bounds.minimum.x + bounds.maximum.x) / 2,
+                    (bounds.minimum.y + bounds.maximum.y) / 2,
+                    (bounds.minimum.z + bounds.maximum.z) / 2)
+                position: ctr
+                pivot: ctr
+                eulerRotation.x: node.rollDeg          // 구르기(차축 X) — 조향(부모 Y)과 분리
+            }
+        }
+        Node {
+            id: frontRightSteer
+            position: sportsCar2_FrontRightWheel_Cylinder_018.ctr
+            pivot: sportsCar2_FrontRightWheel_Cylinder_018.ctr
+            eulerRotation.y: node.steerDeg
+            Model {
+                id: sportsCar2_FrontRightWheel_Cylinder_018
+                objectName: "SportsCar2_FrontRightWheel_Cylinder.018"
+                source: "meshes/sportsCar2_FrontRightWheel_Cylinder_018_mesh.mesh"
+                materials: [
+                    grey_material,
+                    black_material
+                ]
+                readonly property vector3d ctr: Qt.vector3d(
+                    (bounds.minimum.x + bounds.maximum.x) / 2,
+                    (bounds.minimum.y + bounds.maximum.y) / 2,
+                    (bounds.minimum.z + bounds.maximum.z) / 2)
+                position: ctr
+                pivot: ctr
+                eulerRotation.x: node.rollDeg
+            }
         }
     }
 

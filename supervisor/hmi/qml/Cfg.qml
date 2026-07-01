@@ -95,6 +95,11 @@ QtObject {
     readonly property int  wheelSteerSmoothMs: 90  // 조향각 부드럽게 따라가는 시간(ms)
     readonly property bool wheelSteerInvert: true  // 바퀴가 반대로 꺾이면 true 로
 
+    // ===== 4바퀴 구르기(엑셀 비례) =====
+    // 엑셀 세기(wheelThrottle %)에 비례해 바퀴가 차축(X)으로 굴러간다. D=전진 / R=후진(반대) / P=정지.
+    readonly property real wheelRollMaxDps: 720    // 풀 엑셀(100%)에서 초당 회전 각도(도/s). 720=2회전/s
+    readonly property bool wheelRollInvert: false  // 구르는 방향이 반대(뒤로 구름)면 true 로
+
     // ===== 차 겉껍데기 X-ray (좌석 제어/이동 중 반투명) =====
     // 평소엔 불투명한 완성차, 좌석 디테일 진입(SEAT_DETAIL)이나 의자 이동(보간) 중엔
     // White 차체 머티리얼을 반투명으로 페이드 → 안의 바닥+의자+레일이 비쳐 보인다.
