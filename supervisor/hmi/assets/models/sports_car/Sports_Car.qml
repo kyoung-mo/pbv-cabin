@@ -13,6 +13,12 @@ Node {
     // 유리창(Windows) 불투명도 — X-ray 시 0으로 페이드해 창문이 사라지고 안이 드러남.
     property real windowOpacity: 1.0
 
+    // 앞바퀴 조향각(도). Cabin3D 에서 기어·wheelSteering 을 압축 매핑해 넣어준다(P면 0).
+    // 각 앞바퀴는 자기 메시의 AABB 중심을 pivot=position 으로 잡아 "제자리"에서만 Y축 회전.
+    //   ※ pivot 만 걸고 position 을 안 맞추면 바퀴가 원점(차 중심)으로 순간이동해 차체에 파묻힌다.
+    //     반드시 position=pivot(=중심) 으로 둘을 같게 걸어 0°일 때 변위 0 → 지금 보이는 상태 유지.
+    property real steerDeg: 0
+
     // Resources
     PrincipledMaterial {
         id: white_material
@@ -94,6 +100,15 @@ Node {
                 grey_material,
                 black_material
             ]
+            // 메시 AABB 중심(런타임 bounds에서 자동 계산 — 실측 좌표 하드코딩 불필요).
+            // position=pivot=중심 → 조향 0°에서 변위 0(안 사라짐), Y축으로만 제자리 회전.
+            readonly property vector3d ctr: Qt.vector3d(
+                (bounds.minimum.x + bounds.maximum.x) / 2,
+                (bounds.minimum.y + bounds.maximum.y) / 2,
+                (bounds.minimum.z + bounds.maximum.z) / 2)
+            position: ctr
+            pivot: ctr
+            eulerRotation.y: node.steerDeg
         }
         Model {
             id: sportsCar2_FrontRightWheel_Cylinder_018
@@ -103,6 +118,13 @@ Node {
                 grey_material,
                 black_material
             ]
+            readonly property vector3d ctr: Qt.vector3d(
+                (bounds.minimum.x + bounds.maximum.x) / 2,
+                (bounds.minimum.y + bounds.maximum.y) / 2,
+                (bounds.minimum.z + bounds.maximum.z) / 2)
+            position: ctr
+            pivot: ctr
+            eulerRotation.y: node.steerDeg
         }
     }
 

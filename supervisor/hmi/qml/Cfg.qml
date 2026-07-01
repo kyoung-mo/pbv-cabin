@@ -88,6 +88,13 @@ QtObject {
     readonly property bool  carTint:      false       // true 면 carBodyColor 로 차체색 교체
     readonly property color carBodyColor: "#ffeef0f2"  // 캐빈 차체 톤(shellColor)과 동일
 
+    // ===== 앞바퀴 조향 회전 =====
+    // wheelSteering(±127) → 앞바퀴 Y축 각도로 압축 매핑. 기어 D/R 일 때만, P면 0(직진).
+    // 회전은 각 바퀴 메시의 AABB 중심(pivot=position)을 축으로 "제자리"에서만 돈다(사라짐 없음).
+    readonly property real wheelSteerMaxDeg: 28    // ±127 입력 → ±이 각도(도). 25~30 권장
+    readonly property int  wheelSteerSmoothMs: 90  // 조향각 부드럽게 따라가는 시간(ms)
+    readonly property bool wheelSteerInvert: true  // 바퀴가 반대로 꺾이면 true 로
+
     // ===== 차 겉껍데기 X-ray (좌석 제어/이동 중 반투명) =====
     // 평소엔 불투명한 완성차, 좌석 디테일 진입(SEAT_DETAIL)이나 의자 이동(보간) 중엔
     // White 차체 머티리얼을 반투명으로 페이드 → 안의 바닥+의자+레일이 비쳐 보인다.
