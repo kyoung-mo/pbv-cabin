@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick3D
 import QtQuick.Controls
 import QtQuick.Layouts
 import "."
@@ -10,6 +11,10 @@ import "."
 // (Loader 재생성 시) 저장된 값이 그대로 복원된다.
 Item {
     id: root
+
+    // 현재 선택 좌석의 current pose (없을 때 대비 fallback).
+    //   상단 3D 미리보기가 이 값에 바인딩 — '적용' 후 서버가 트윈한 current 를 그대로 반영한다.
+    readonly property var curPose: vehicleState.seatPose[vehicleState.selectedSeat]
 
     ColumnLayout {
         anchors.fill: parent
@@ -90,7 +95,7 @@ Item {
             }
         }
 
-        // 좌석 큰 박스 — 글래스 카드 + 실사풍 좌석 일러스트
+        // 좌석 큰 박스 — 글래스 카드 + 실시간 3D 좌석(현재 pose 반영)
         Card {
             Layout.fillWidth: true
             Layout.preferredHeight: 230
@@ -99,12 +104,43 @@ Item {
             fillTop: vehicleState.curIsFront ? "#ffeaf1fc" : Theme.surfaceTop
             fillBottom: Theme.surfaceBottom
 
-            Image {
+            // 상단 좌석 3D — Cabin3D 와 동일한 Seat3D 를 재사용.
+            //   recline/axis2 는 선택 좌석의 current 값에 바인딩 → '적용' 후 서버 트윈을 그대로 따라감.
+            View3D {
                 anchors.fill: parent
                 anchors.margins: Theme.spaceSm
-                source: "../assets/seats/seat.png"
-                fillMode: Image.PreserveAspectFit
-                smooth: true
+
+                environment: SceneEnvironment {
+                    backgroundMode: SceneEnvironment.Transparent
+                    antialiasingMode: SceneEnvironment.MSAA
+                    antialiasingQuality: SceneEnvironment.Medium
+                }
+
+                // 좌석 중심(약 y=60)을 바라보는 3/4 부감 리그.
+                Node {
+                    eulerRotation.x: -12
+                    eulerRotation.y: 32
+                    position: Qt.vector3d(0, 60, 0)
+                    PerspectiveCamera {
+                        z: 300
+                        fieldOfView: 42
+                        clipNear: 10
+                        clipFar: 2000
+                    }
+                }
+
+                DirectionalLight { eulerRotation.x: -52; eulerRotation.y: -35; brightness: Cfg.keyBrightness; castsShadow: false }
+                DirectionalLight { eulerRotation.x: -20; eulerRotation.y: 150; brightness: Cfg.fillBrightness; castsShadow: false }
+
+                Seat3D {
+                    isRear: !vehicleState.curIsFront
+                    recline: root.curPose ? root.curPose.recline : 90
+                    axis2: root.curPose ? root.curPose.axis2 : 0
+                    moving: vehicleState.seatMoving[vehicleState.selectedSeat] === true
+                    pinch: vehicleState.seatPinch[vehicleState.selectedSeat] === true
+                    showIndicator: Cfg.showMoveIndicator
+                    glowColor: Cfg.moveGlowColor
+                }
             }
             Text {
                 anchors.right: parent.right

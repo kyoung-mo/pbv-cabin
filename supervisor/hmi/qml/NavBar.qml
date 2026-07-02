@@ -9,14 +9,8 @@ import "."
 Item {
     id: nav
 
-    // 무입력 페이드 — 대기(AMBIENT, 10초 무입력)면 거의 투명, ACTIVE면 또렷.
-    //   ※ opacity 만 낮춘다. enabled/visible 은 그대로라 흐릿해도 버튼 클릭/동작은 유지되고,
-    //     좌석/모드를 누르면 ACTIVE 복귀(_register_activity)로 다시 또렷해진다.
-    opacity: vehicleState.uiMode === "AMBIENT" ? Theme.navOpacityIdle
-                                               : Theme.navOpacityActive
-    Behavior on opacity {
-        NumberAnimation { duration: Theme.navFadeMs; easing.type: Easing.InOutQuad }
-    }
+    // 하단바는 항상 또렷하게 유지(홈/대기에서도 페이드하지 않음).
+    opacity: Theme.navOpacityActive
 
     // 지금 활성 섹션(강조용) — uiMode/화면 상태에서 파생.
     readonly property string active:
@@ -53,18 +47,18 @@ Item {
 
                 Column {
                     anchors.centerIn: parent
-                    spacing: 5
+                    spacing: 10
                     NavIcon {
                         anchors.horizontalCenter: parent.horizontalCenter
                         kind: cell.modelData.key
                         color: cell.tint
-                        width: 26; height: 26
+                        width: 48; height: 48       // 바 높이 2배에 맞춰 아이콘도 크게(가시성)
                     }
                     Text {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: cell.modelData.label
                         color: cell.tint
-                        font.pixelSize: Theme.fsLabel - 4
+                        font.pixelSize: Theme.fsLabel
                         font.bold: cell.isActive
                         font.letterSpacing: Theme.tracking
                     }

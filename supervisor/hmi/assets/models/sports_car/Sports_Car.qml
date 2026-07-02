@@ -31,8 +31,8 @@ Node {
         baseColor: node.bodyColor
         roughness: 0.9039215445518494
         opacity: node.shellOpacity                  // X-ray 시 낮춰 안의 의자가 비침
-        // 반투명이 실제로 보이도록 Blend (원본 Opaque는 opacity 무시). 1.0이면 불투명과 동일.
-        alphaMode: PrincipledMaterial.Blend
+        // 완성차(1.0)에선 Opaque(깊이 기록 → 반대편 차체가 안 비침), 페이드 중에만 Blend(X-ray 투시).
+        alphaMode: node.shellOpacity < 1.0 ? PrincipledMaterial.Blend : PrincipledMaterial.Opaque
     }
     PrincipledMaterial {
         id: windows_material
@@ -40,7 +40,9 @@ Node {
         baseColor: "#ff070707"
         roughness: 0.9039215445518494
         opacity: node.windowOpacity                 // X-ray 시 0으로 페이드 → 창문 사라짐
-        alphaMode: PrincipledMaterial.Blend         // opacity 적용되도록 Blend
+        // 완성차(1.0)에선 Opaque → 깊이 기록 → 앞유리가 반대편 창틀/필러를 정상 차폐(회색 선 안 비침).
+        // 페이드(1 미만) 중에만 Blend 로 전환해 X-ray 투시는 그대로. (1.0에서 Opaque≡Blend, 앞면 동일)
+        alphaMode: node.windowOpacity < 1.0 ? PrincipledMaterial.Blend : PrincipledMaterial.Opaque
     }
     PrincipledMaterial {
         id: grey_material
@@ -48,7 +50,8 @@ Node {
         baseColor: "#ff202020"
         roughness: 0.9039215445518494
         opacity: node.windowOpacity                 // 사이드/백미러 검은 부분 — 창문과 같이 사라짐
-        alphaMode: PrincipledMaterial.Blend         // (Grey는 휠 림에도 쓰여 X-ray 시 같이 페이드됨)
+        // 완성차(1.0)에선 Opaque(깊이 기록 → 반대편 트림이 안 비침), 페이드 중에만 Blend.
+        alphaMode: node.windowOpacity < 1.0 ? PrincipledMaterial.Blend : PrincipledMaterial.Opaque
     }
     PrincipledMaterial {
         id: headlights_material

@@ -39,9 +39,9 @@ QtObject {
     readonly property color textSecondary: "#6b7280"    // 보조(중간 회색)
     readonly property color textMuted:      "#7c8493"    // 흐린(중밝은 회색) — 흰 배경서 너무 흐리지 않게
 
-    // ── 하단 내비게이션 바 (반투명 흰색, 라이트) ────────────────────
-    readonly property int   navHeight: 76            // 바 높이(px)
-    readonly property color navBg:     "#d0ffffff"   // 또렷한 반투명 흰색(αRGB, ~82%)
+    // ── 하단 내비게이션 바 (옅은 회색, 라이트) ──────────────────────
+    readonly property int   navHeight: 152           // 바 높이(px) — 가시성 위해 2배(기존 76)
+    readonly property color navBg:     "#f2dfe2e6"    // 옅은 회색(αRGB, ~95%) — 가시성 개선
     // 무입력 페이드: 평소(ACTIVE)엔 또렷, 10초 무입력→대기(AMBIENT)면 거의 안 보이게.
     //   (opacity 만 낮춤 — enabled/클릭 영역은 유지되어 흐릿해도 버튼 동작은 살아있음)
     readonly property real navOpacityActive: 1.0     // 또렷할 때(터치 직후/ACTIVE)

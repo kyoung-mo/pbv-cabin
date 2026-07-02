@@ -26,10 +26,9 @@ FRONT_SEATS = ("driver", "passenger")
 # 기어 슬라이드 인덱스(UI 배치): 아래(0)=R, 중앙(1)=P, 위(2)=D
 GEARS = ("R", "P", "D")
 
-# 기어 → CAN GearStatus(0x070) Gear 값 인코딩. ECU 합의: R=0 / P=1(중립,기본) / D=2.
-#   중립(P)=1 을 기준으로 위로 한 칸=D(2, 상한 클램프), 아래로=P(1)→R(0, 하한 클램프).
-#   (GEARS 순서 R-P-D 의 인덱스와 동일 — 슬라이더 위치와 CAN 값이 같은 정렬이 된다.)
-GEAR_CAN_VALUE = {"R": 0, "P": 1, "D": 2}
+# 기어 → CAN GearStatus(0x070) Gear 값 인코딩. ECU 합의: P=0(중립,기본) / D=1(전진) / R=2(후진).
+#   슬라이더 위치(GEARS: R-P-D)와는 별개인 CAN 전송 값이다.
+GEAR_CAN_VALUE = {"P": 0, "D": 1, "R": 2}
 
 # 주행(DRIVE) 모드 식별자 — 기어 D/R 진입을 허용하는 유일한 모드
 DRIVE_MODE = "주행"
@@ -101,6 +100,10 @@ class VehicleState(QObject):
         # 주행 모드 선택 후 "좌석 배치 완료 시 대기(홈)로 자동 이동" 대기 플래그.
         #   selectMode(주행)에서 켜고, 좌석 이동이 모두 끝나면 _check_drive_settle 이 끈다.
         self._drive_settle_pending = False
+        # 모드 적용 시 뒷좌석 슬라이드를 "왼쪽 먼저 → 왼쪽 완료 후 오른쪽" 순서로 처리.
+        #   rear_left 슬라이드 트윈이 진행 중이면 rear_right 명령을 여기 담아두고,
+        #   rear_left 트윈이 끝나는 순간(_on_tween_tick) 비로소 rear_right 를 적용한다.
+        self._pending_rear_right = False
         self._selected_seat = "driver"
         # 좌석별 각도값 (재진입해도 유지되도록 여기에만 저장).
         # 각 축은 target(목표) / current(3D가 실제로 가 있는 값) 두 개로 분리한다.
@@ -511,6 +514,9 @@ class VehicleState(QObject):
         """
         if not self._drive_settle_pending:
             return
+        # 오른쪽 뒷좌석이 아직 대기 중(왼쪽 슬라이드 완료 대기)이면 배치 미완료로 본다.
+        if self._pending_rear_right:
+            return
         if self._any_seat_moving():
             return
         self._drive_settle_pending = False
@@ -681,20 +687,41 @@ class VehicleState(QObject):
         self._mark_commit(seat, axis)
         self.seatMovingChanged.emit()
 
+    def _apply_seat_cmd(self, seat):
+        """좌석 1개의 현재 target 을 인터록 통과 시 송신 + 커밋(두 축 한 프레임)."""
+        if not self._seat_cmd_approved(seat):
+            return
+        self._send_seat(seat)
+        self._mark_commit(seat, "recline")
+        self._mark_commit(seat, "axis2")
+
     def _apply_mode_preset(self, mode):
-        """모드 프리셋 값으로 4개 좌석 target 세팅 후 즉시 적용. 미포함 좌석/축은 유지."""
+        """모드 프리셋 값으로 4개 좌석 target 세팅 후 적용. 미포함 좌석/축은 유지.
+
+        뒷좌석 슬라이드는 "왼쪽 먼저 → 왼쪽 완료 후 오른쪽" 순서로 움직인다.
+          · 먼저 모든 좌석 target 을 세팅한다.
+          · 앞좌석 + rear_left 는 즉시 적용(송신/트윈 시작).
+          · rear_right 는 rear_left 슬라이드 트윈이 진행 중이면 미뤄뒀다가
+            그 트윈이 끝나는 순간(_on_tween_tick) 적용한다. (트윈이 없으면 즉시 적용)
+        """
         preset = MODE_PRESETS.get(mode)
         if not preset:
             return
+        # 1) 모든 좌석 target 먼저 세팅 (SEAT_DETAIL 슬라이더/dirty 즉시 반영용).
         for seat, axes in preset.items():
             for axis, value in axes.items():
                 self._seat_values[seat][axis]["target"] = int(value)
-            if not self._seat_cmd_approved(seat):
-                continue
-            # 좌석당 한 번만 송신(두 축 한 프레임). 두 축 모두 커밋 처리.
-            self._send_seat(seat)
-            self._mark_commit(seat, "recline")
-            self._mark_commit(seat, "axis2")
+        # 2) 앞좌석 + 왼쪽 뒷좌석은 바로 적용.
+        self._pending_rear_right = False
+        for seat in ("driver", "passenger", "rear_left"):
+            if seat in preset:
+                self._apply_seat_cmd(seat)
+        # 3) 오른쪽 뒷좌석: 왼쪽 슬라이드가 진행 중이면 그게 끝난 뒤에 움직인다.
+        if "rear_right" in preset:
+            if ("rear_left", "axis2") in self._tweens:
+                self._pending_rear_right = True
+            else:
+                self._apply_seat_cmd("rear_right")
         self.seatValuesChanged.emit()   # SEAT_DETAIL 슬라이더/dirty 즉시 갱신
         self.seatMovingChanged.emit()
 
@@ -738,6 +765,10 @@ class VehicleState(QObject):
                 self._seat_values[seat][axis]["current"] = int(round(val))
         for key in done:
             del self._tweens[key]
+        # 왼쪽 뒷좌석 슬라이드가 끝났으면, 미뤄둔 오른쪽 뒷좌석을 이제 움직인다.
+        if self._pending_rear_right and ("rear_left", "axis2") in done:
+            self._pending_rear_right = False
+            self._apply_seat_cmd("rear_right")   # rear_right 슬라이드 트윈 새로 시작
         if not self._tweens:
             self._tween_timer.stop()
         if done:

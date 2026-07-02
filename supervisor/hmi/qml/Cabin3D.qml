@@ -67,11 +67,20 @@ View3D {
         }
     }
 
-    // ── 카메라 리그 ── 원점을 바라보는 orbit 리그. 3/4 부감 "고정"(상수=Cfg).
+    // ── 카메라 리그 ── 원점을 바라보는 orbit 리그. 3/4 부감.
+    //   ACTIVE(좌석/모드 선택)는 기존 각(camPitch/camYaw), AMBIENT(홈/대기)는 더 옆면쪽 각.
+    property real camPitchNow: vehicleState.uiMode === "AMBIENT" ? Cfg.camPitchAmbient : Cfg.camPitch
+    property real camYawNow:   vehicleState.uiMode === "AMBIENT" ? Cfg.camYawAmbient   : Cfg.camYaw
+    Behavior on camPitchNow {
+        NumberAnimation { duration: Cfg.ambientTransitionMs; easing.type: Easing.InOutQuad }
+    }
+    Behavior on camYawNow {
+        NumberAnimation { duration: Cfg.ambientTransitionMs; easing.type: Easing.InOutQuad }
+    }
     Node {
         id: cameraRig
-        eulerRotation.x: Cfg.camPitch
-        eulerRotation.y: Cfg.camYaw
+        eulerRotation.x: view.camPitchNow
+        eulerRotation.y: view.camYawNow
 
         PerspectiveCamera {
             id: camera

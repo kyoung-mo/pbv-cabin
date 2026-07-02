@@ -51,8 +51,12 @@ QtObject {
     readonly property real camDistanceAmbient: 820  // AMBIENT(전체화면) 시 카메라 거리 — 가까이=차 크게
     readonly property real camAmbientPanX: 75       // AMBIENT 시 카메라 가로 패닝(+면 차량이 화면 왼쪽으로)
                                                      //   전체화면에서 차가 오른쪽 치우치면 이 값으로 중앙 정렬
-    readonly property real camPitch:    -32         // 부감 각도(X, 내려다봄)
+    readonly property real camPitch:    -40         // 부감 각도(X, 내려다봄)
     readonly property real camYaw:      -28         // 3/4 각도(Y)
+    // AMBIENT(홈/대기)에선 더 옆면쪽으로 — 부감을 낮추고(덜 내려다봄) 요를 키워
+    //   차 측면+바퀴가 더 보이게 → 바퀴 구르기가 잘 보인다. ACTIVE(좌석/모드 선택)는 위 값 유지.
+    readonly property real camPitchAmbient: -24     // AMBIENT 부감(덜 내려다봄, 측면↑)
+    readonly property real camYawAmbient:   -44     // AMBIENT 3/4 각도(더 옆면쪽)
     readonly property real camFov:      55          // 시야각(FOV)
 
     // ===== 대기(AMBIENT) 레이아웃 전환 =====
