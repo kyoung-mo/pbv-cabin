@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"
 #include "can.h"
 #include "i2c.h"
 #include "tim.h"
@@ -31,6 +32,7 @@
 #include "servo.h"          /* 리클라인 서보(SG90 x2) 모듈 — TIM2 PWM */
 #include "ina226.h"         /* 서보 전류센서(INA226 x2) — 안티핀치 */
 #include "model_car_net.h"  /* cantools 생성 DBC 라이브러리 (프레임 ID/시그널 정식 정의) */
+#include "cmsis_os.h"       /* FreeRTOS CMSIS-RTOS2 (태스크/큐/osDelay) */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -75,19 +77,27 @@
 /* USER CODE BEGIN PV */
 /* 리클라인 각도는 servo 모듈이 보관(servo_get_deg)하므로 별도 에코 변수 불필요 */
 uint8_t  cmd_cargo_lamp = 0;       /* TODO: 램프 GPIO */
-uint8_t  pinch_rl       = 0;       /* INA226 안티핀치: 1=RL 서보 끼임 감지(래치) */
-uint8_t  pinch_rr       = 0;       /* 1=RR 서보 끼임 감지(래치) */
-uint32_t lastStatusTick = 0;
+volatile uint8_t pinch_rl = 0;     /* INA226 안티핀치: 1=RL 끼임(래치). MotionTask 기록/StatusTask 읽기 */
+volatile uint8_t pinch_rr = 0;     /* 1=RR 서보 끼임 감지(래치) */
 static uint8_t ina_ok_rl = 0;      /* INA226(RL) 장착 여부 — 미장착이면 모니터 skip */
 static uint8_t ina_ok_rr = 0;      /* INA226(RR) 장착 여부 */
+
+/* FreeRTOS: CAN 수신 프레임 → 큐 → MotionTask 에서 디코드. ISR 부담 최소화 + 상태 단일소유. */
+typedef struct { uint32_t id; uint8_t dlc; uint8_t data[8]; } can_frame_t;
+static osMessageQueueId_t canRxQ;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
 static void CAN_Config(void);
 static void send_status(void);
 static void pinch_service(void);
+static void can_dispatch(const can_frame_t *f);   /* 큐에서 꺼낸 프레임 처리(MotionTask) */
+void StartMotionTask(void *argument);             /* 액추에이터 + CAN 디스패치 */
+void StartStatusTask(void *argument);             /* 상태 송신(100ms) */
+void app_rtos_init(void);                          /* 큐/태스크 생성(freertos.c 에서 호출) */
 #if PINCH_DEBUG
 static void i2c_scan(void);
 #endif
@@ -129,8 +139,8 @@ int main(void)
   MX_GPIO_Init();
   MX_CAN1_Init();
   MX_USART2_UART_Init();
-  MX_TIM2_Init();                     /* 리클라인 서보용 50Hz PWM (PA0/PA1) */
-  MX_I2C1_Init();                     /* INA226 전류센서 버스 (PB6/PB7) */
+  MX_TIM2_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   CAN_Config();
   slide_init();
@@ -142,8 +152,16 @@ int main(void)
   i2c_scan();                                 /* 버스에 응답하는 I2C 주소 출력(진단) */
 #endif
   slide_home();                       /* 부팅 시 0점 잡기 */
-  lastStatusTick = HAL_GetTick();
   /* USER CODE END 2 */
+
+  /* Init scheduler */
+  osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
+  MX_FREERTOS_Init();
+
+  /* Start scheduler */
+  osKernelStart();
+
+  /* We should never get here as control is now taken by the scheduler */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
@@ -152,14 +170,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    slide_service();                  /* 논블로킹 슬라이드 이동 */
-    servo_service();                  /* 논블로킹 서보 램프(속도 제한) */
-    pinch_service();                  /* 논블로킹 서보 전류 감시(안티핀치) */
-
-    if (HAL_GetTick() - lastStatusTick >= STATUS_PERIOD_MS) {
-      lastStatusTick += STATUS_PERIOD_MS;
-      send_status();
-    }
+    /* FreeRTOS 스케줄러가 제어를 가져가므로 이 지점(main while)엔 도달하지 않음.
+     * 애플리케이션 로직은 MotionTask / StatusTask 로 이동(USER CODE 4). */
   }
   /* USER CODE END 3 */
 }
@@ -270,28 +282,35 @@ static void send_status(void)
   HAL_CAN_AddTxMessage(&hcan1, &tx, d, &mbx);
 }
 
-/* CAN 수신 콜백 — DBC unpack 으로 시그널을 풀어 slide 모듈로 전달한다(분리 유지).
- * unpack 의 size 인자는 소스 버퍼 크기(8). d 를 0으로 초기화했으므로 DLC 가 짧아도
- * 미수신 바이트는 0으로 읽힌다. */
+/* CAN 수신 콜백(ISR): 프레임만 큐에 넣고 즉시 반환 → 무거운 디코드/구동은 MotionTask 로.
+ * 큐가 꽉 차면(timeout 0) 드롭. ISR 부담 최소화 + 액추에이터 접근을 단일 태스크로 일원화. */
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
   CAN_RxHeaderTypeDef rx;
-  uint8_t d[8] = {0};
+  can_frame_t f = {0};
 
-  if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rx, d) != HAL_OK) return;
+  if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rx, f.data) != HAL_OK) return;
+  f.id  = rx.StdId;
+  f.dlc = rx.DLC;
+  osMessageQueuePut(canRxQ, &f, 0, 0);   /* ISR-safe(timeout 0) */
+}
 
-  switch (rx.StdId) {
+/* 큐에서 꺼낸 CAN 프레임을 DBC unpack 하여 slide/servo 모듈로 전달(MotionTask 문맥에서 호출).
+ * unpack 의 size 인자는 소스 버퍼 크기(8). data 를 0으로 초기화했으므로 DLC 가 짧아도 0으로 읽힘. */
+static void can_dispatch(const can_frame_t *f)
+{
+  switch (f->id) {
 
     case MODEL_CAR_NET_HMI_EMERGENCY_FRAME_ID: {       /* 0x010: 최고 우선 처리 */
       struct model_car_net_hmi_emergency_t m;
-      if (model_car_net_hmi_emergency_unpack(&m, d, sizeof(d)) == 0)
+      if (model_car_net_hmi_emergency_unpack(&m, f->data, sizeof(f->data)) == 0)
         slide_estop(m.emergency_stop_flag);            /* 1=래치 정지, 0=해제 */
       break;
     }
 
     case MODEL_CAR_NET_REAR_LEFT_SEAT_CMD_FRAME_ID: {  /* 0x120: 좌석 좌 */
       struct model_car_net_rear_left_seat_cmd_t m;
-      if (model_car_net_rear_left_seat_cmd_unpack(&m, d, sizeof(d)) == 0) {
+      if (model_car_net_rear_left_seat_cmd_unpack(&m, f->data, sizeof(f->data)) == 0) {
         pinch_rl = 0;                                  /* 새 명령 = 끼임 해소 간주, 래치 해제 */
         servo_set_deg(SERVO_RL, m.rl_recline_angle);   /* 리클라인 SG90 서보(좌) */
         if (m.rl_slide_position == SLIDE_REZERO_CMD)
@@ -306,7 +325,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 
     case MODEL_CAR_NET_REAR_RIGHT_SEAT_CMD_FRAME_ID: { /* 0x121: 좌석 우 */
       struct model_car_net_rear_right_seat_cmd_t m;
-      if (model_car_net_rear_right_seat_cmd_unpack(&m, d, sizeof(d)) == 0) {
+      if (model_car_net_rear_right_seat_cmd_unpack(&m, f->data, sizeof(f->data)) == 0) {
         pinch_rr = 0;                                  /* 새 명령 = 끼임 해소 간주, 래치 해제 */
         servo_set_deg(SERVO_RR, m.rr_recline_angle);   /* 리클라인 SG90 서보(우) */
         cmd_cargo_lamp = m.cargo_lamp_status;          /* TODO 램프 GPIO */
@@ -399,7 +418,80 @@ static void pinch_service(void)
   }
 }
 
+/* --------------------------------------------------------------------------
+ *  FreeRTOS 태스크 (슈퍼루프 → 태스크 분리)
+ * ------------------------------------------------------------------------ */
+
+/* MotionTask(높은 우선순위): CAN 명령 소비 → 슬라이드/서보/안티핀치 서비스.
+ * 액추에이터·I2C 상태를 이 태스크가 단독 소유하므로 별도 락 불필요.
+ * osDelay(1)로 1ms 주기 — 스텝 타이밍은 slide.c 내부 DWT(µs) 판정 유지. */
+void StartMotionTask(void *argument)
+{
+  (void)argument;
+  for (;;) {
+    can_frame_t f;
+    while (osMessageQueueGet(canRxQ, &f, NULL, 0) == osOK)
+      can_dispatch(&f);               /* 수신 명령 적용(디코드) */
+    slide_service();                  /* 논블로킹 슬라이드 이동 */
+    servo_service();                  /* 논블로킹 서보 램프 */
+    pinch_service();                  /* 안티핀치(내부 20ms throttle) */
+    /* 이동 중엔 tight-loop로 정밀 스텝(DWT µs) — osDelay(1) 지터가 스텝모터 탈조 유발.
+     * 대기 중엔 osDelay로 StatusTask/idle 에 양보(HAL tick=TIM6·DWT는 계속 진행). */
+    if (slide_is_moving()) osThreadYield();
+    else                   osDelay(1);
+  }
+}
+
+/* StatusTask(보통 우선순위): 0x220/0x221 상태를 100ms 주기로 송신.
+ * 위치/핀치 등은 단일 int 읽기라 atomic — 별도 락 없이 스냅샷 송신. */
+void StartStatusTask(void *argument)
+{
+  (void)argument;
+  for (;;) {
+    send_status();
+    osDelay(STATUS_PERIOD_MS);
+  }
+}
+
+/* 큐/태스크 생성. osKernelInitialize 이후(스케줄러 시작 전)에 호출되어야 하므로
+ * freertos.c 의 MX_FREERTOS_Init 에서 부른다. */
+void app_rtos_init(void)
+{
+  canRxQ = osMessageQueueNew(8, sizeof(can_frame_t), NULL);
+
+  const osThreadAttr_t motion_attr = {
+    .name = "Motion", .stack_size = 512 * 4, .priority = osPriorityHigh,
+  };
+  const osThreadAttr_t status_attr = {
+    .name = "Status", .stack_size = 256 * 4, .priority = osPriorityNormal,
+  };
+  osThreadNew(StartMotionTask, NULL, &motion_attr);
+  osThreadNew(StartStatusTask, NULL, &status_attr);
+}
+
 /* USER CODE END 4 */
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM6 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM6)
+  {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.

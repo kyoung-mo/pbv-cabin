@@ -57,7 +57,7 @@ static const slide_io_t IO[SLIDE_COUNT] = {
  * 뒤집으면 된다(재배선 불필요). 축마다 모터 장착 방향이 달라 채널별로 둔다. */
 static const GPIO_PinState DIR_FWD_LEVEL[SLIDE_COUNT] = {
   GPIO_PIN_SET,     /* SLIDE_RL — h 호밍이 반대로 가서 반전(2026-06-25) */
-  GPIO_PIN_SET,     /* SLIDE_RR — n10이 오른쪽으로 가서 반전(2026-06-24) */
+  GPIO_PIN_SET,     /* SLIDE_RR — EN/STEP 오배선 수정 후 원복(2026-07-02) */
 };
 
 /* 호밍 사용 여부.
@@ -264,4 +264,14 @@ uint8_t slide_get_pos_mm(slide_ch_t ch)
   if (mm < 0) mm = 0;
   if (mm > SLIDE_MAX_MM) mm = SLIDE_MAX_MM;
   return (uint8_t)mm;
+}
+
+/* 이동 중이면 1(estop 시 0). 어느 축이든 목표 미도달 또는 호밍 중이면 이동으로 본다.
+ * FreeRTOS MotionTask 가 이동 중엔 tight-loop(정밀 DWT 스텝), 대기 중엔 양보하도록 판단용. */
+uint8_t slide_is_moving(void)
+{
+  if (estop) return 0;
+  for (uint8_t ch = 0; ch < SLIDE_COUNT; ch++)
+    if (homeRemaining[ch] > 0 || posSteps[ch] != targetSteps[ch]) return 1;
+  return 0;
 }
