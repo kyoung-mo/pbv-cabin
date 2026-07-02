@@ -288,25 +288,23 @@ class WheelInput(QObject):
             # ── 기어 패들 엣지(인터록 무관 — VehicleState 가 인터록 판단) ──
             self._handle_paddles(up, down)
 
-            # ── 인터록 게이트: 주행-가능(D/R)일 때만 실제 값, 아니면 중립(0).
-            #    화면 표시와 CAN 송신을 동일하게 게이트한다 — 중립(P)에선 화면 막대/게이지도 0.
-            if self._enabled():
-                disp_steer, disp_throttle, disp_brake = steer, throttle, brake
-            else:
-                disp_steer, disp_throttle, disp_brake = 0, 0, 0
-                self._pedal_filter.reset()     # 주행 진입 시 깨끗한 상태로
-                self._steer_filter.reset()
-
-            # ── 화면 반영: 게이트된 값으로 (변할 때만 emit) ──
-            screen = (disp_steer, disp_throttle, disp_brake)
+            # ── 화면 반영: 항상 실제 값(인터록 무관) — 변할 때만 emit ──
+            #    P(중립)에서도 조향값을 읽어 STEER 위젯에, 엑셀/브레이크를 왼쪽 세로 막대에
+            #    표시한다. "실제 바퀴 정지"는 아래 CAN 게이트가 담당(화면은 안 막는다).
+            screen = (steer, throttle, brake)
             if screen != last_screen:
                 last_screen = screen
-                self.wheelInput.emit(disp_steer, disp_throttle, disp_brake)
+                self.wheelInput.emit(steer, throttle, brake)
 
-            # ── CAN 송신: 동일하게 게이트된 값 (throttle% → RPM) ──
-            tx_rpm = min(RPM_MAX, disp_throttle * RPM_PER_PCT)
+            # ── CAN 송신(인터록 게이트): 주행-가능(D/R)일 때만 실제 값, P 면 중립(0).
+            #    P 에선 (0,0,0) 을 보내 실제 드라이브 모터를 정지시킨다 — 화면 표시와 무관.
+            if self._enabled():
+                tx_steer, tx_throttle, tx_brake = steer, throttle, brake
+            else:
+                tx_steer, tx_throttle, tx_brake = 0, 0, 0
+            tx_rpm = min(RPM_MAX, tx_throttle * RPM_PER_PCT)
             try:
-                self._can.send_drive_cmd(disp_steer, tx_rpm, disp_brake)
+                self._can.send_drive_cmd(tx_steer, tx_rpm, tx_brake)
             except Exception:
                 pass
 

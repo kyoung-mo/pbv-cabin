@@ -116,12 +116,10 @@ View3D {
             shellOpacity: view.carShellOpacity        // X-ray: 평소 1.0, 좌석 이동/디테일 시 반투명
             windowOpacity: view.carWindowOpacity      // X-ray: 유리창도 같이 사라짐
 
-            // ── 앞바퀴 조향 ── 기어 D/R 일 때만 wheelSteering(±127)을 ±maxDeg로 압축 매핑, P면 0.
+            // ── 앞바퀴 조향 ── 기어와 무관하게 항상 wheelSteering(±127)을 ±maxDeg로 압축 매핑.
+            //   P(중립)에서도 핸들을 틀면 앞바퀴가 조향각만큼 틀어진다(단, 구르기 rollDeg 는 P 에서 정지).
             //   (부호가 반대면 Cfg.wheelSteerInvert=true. 회전은 Sports_Car 내부에서 제자리로 처리.)
             steerDeg: {
-                var g = vehicleState.gear
-                if (g !== "D" && g !== "R")
-                    return 0
                 var s = Math.max(-127, Math.min(127, vehicleState.wheelSteering))
                 var deg = s / 127 * Cfg.wheelSteerMaxDeg
                 return Cfg.wheelSteerInvert ? -deg : deg

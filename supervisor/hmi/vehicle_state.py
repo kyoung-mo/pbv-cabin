@@ -93,8 +93,14 @@ class VehicleState(QObject):
         # CAN 송신 허브(없으면 콘솔 폴백). RX 시그널은 main 에서 onSeatStatus 등에 연결.
         self._can = can_hub
         self._gear = "P"
-        self._cabin_mode = ""                  # 아직 미선택
+        # 시작 기본값: 주행 모드 + P(중립). (홈/대기 화면은 아래 _ui_mode=AMBIENT)
+        #   주행이 기본이라 시작부터 기어 슬라이드가 열려 있다(gearLocked=False).
+        #   좌석 기본 포즈가 이미 주행 프리셋과 같으므로 여기선 CAN 을 보내지 않는다.
+        self._cabin_mode = DRIVE_MODE
         self._right_panel_screen = "MODE_SELECT"
+        # 주행 모드 선택 후 "좌석 배치 완료 시 대기(홈)로 자동 이동" 대기 플래그.
+        #   selectMode(주행)에서 켜고, 좌석 이동이 모두 끝나면 _check_drive_settle 이 끈다.
+        self._drive_settle_pending = False
         self._selected_seat = "driver"
         # 좌석별 각도값 (재진입해도 유지되도록 여기에만 저장).
         # 각 축은 target(목표) / current(3D가 실제로 가 있는 값) 두 개로 분리한다.
@@ -252,6 +258,10 @@ class VehicleState(QObject):
         self.cabinModeChanged.emit()
         # 모드 프리셋을 4개 좌석에 즉시 적용(target 세팅 + 트윈 시작 + SEAT_CMD print).
         self._apply_mode_preset(mode)
+        # 주행 모드: 좌석이 전부 배치되면 대기(홈)로 자동 이동. (다른 모드는 현 화면 유지)
+        #   이미 배치돼 있으면(움직임 없음) 즉시, 이동 중이면 배치 완료 시점에 이동한다.
+        self._drive_settle_pending = (mode == DRIVE_MODE)
+        self._check_drive_settle()
 
     @Slot()
     def modeBlockedNotice(self):
@@ -282,14 +292,25 @@ class VehicleState(QObject):
         self.rightPanelScreenChanged.emit()
 
     @Slot()
-    def toggleCarArea(self):
-        """왼쪽 차량 영역 클릭:
-        MODE_SELECT ↔ SEAT_OVERVIEW 토글, SEAT_DETAIL이면 MODE_SELECT로."""
-        self._register_activity()
-        if self._right_panel_screen == "MODE_SELECT":
+    def cycleCarArea(self):
+        """왼쪽 차량 3D 탭 — 한 번 누를 때마다 홈 → 모드 → 좌석 → 홈 순환.
+
+          · 홈(AMBIENT)            → 모드(ACTIVE + MODE_SELECT)
+          · 모드(MODE_SELECT)      → 좌석(ACTIVE + SEAT_OVERVIEW)
+          · 좌석(SEAT_OVERVIEW/DETAIL) → 홈(AMBIENT)
+        """
+        if self._ui_mode == "AMBIENT":
+            # 홈 → 모드 선택 (ACTIVE 복귀 + 무입력 타이머 시작)
+            self._register_activity()
+            self._set_screen("MODE_SELECT")
+        elif self._right_panel_screen == "MODE_SELECT":
+            # 모드 → 좌석 개요
+            self._register_activity()
             self._set_screen("SEAT_OVERVIEW")
         else:
-            self._set_screen("MODE_SELECT")
+            # 좌석(개요/디테일) → 홈(대기). (타이머와 무관: 입력 아님)
+            self._idle_timer.stop()
+            self._set_ui_mode("AMBIENT")
 
     @Slot(str)
     def selectSeat(self, seat):
@@ -326,6 +347,8 @@ class VehicleState(QObject):
 
     def _register_activity(self):
         """기어를 제외한 '입력'마다 호출 — 무입력 타이머 리셋(+AMBIENT면 깨우기)."""
+        # 사용자가 직접 조작하면 주행 모드 '자동 대기 이동'은 취소(원치 않는 홈 이동 방지).
+        self._drive_settle_pending = False
         if self._ui_mode == "AMBIENT":
             self._set_ui_mode("ACTIVE")
         self._idle_timer.start(IDLE_TIMEOUT_MS)
@@ -455,7 +478,7 @@ class VehicleState(QObject):
         self.seatValuesChanged.emit()
 
     # --- 3D 캐빈이 구독하는 좌석별 "이동(보간) 중" 상태 맵 (목표 4: 시각 피드백) ---
-    def _get_seat_moving(self):
+    def _seat_moving_map(self):
         moving = {seat: False for seat in SEAT_LABELS}
         # 뒷좌석 슬라이드(open-loop) 로컬 트윈 진행 중
         for (seat, _axis) in self._tweens:
@@ -470,7 +493,30 @@ class VehicleState(QObject):
                 moving[seat] = True
         return moving
 
+    def _get_seat_moving(self):
+        return self._seat_moving_map()
+
     seatMoving = Property("QVariantMap", _get_seat_moving, notify=seatMovingChanged)
+
+    def _any_seat_moving(self):
+        """좌석 중 하나라도 이동(보간) 중이면 True — 배치 완료 판정에 사용."""
+        return any(self._seat_moving_map().values())
+
+    def _check_drive_settle(self):
+        """주행 모드 선택 후 좌석이 전부 배치되면 대기(홈, AMBIENT)로 자동 이동.
+
+        selectMode(주행)에서 켠 _drive_settle_pending 을 조건으로, 좌석 이동이 모두
+        끝난 순간(어떤 좌석도 이동 중이 아님) 한 번만 홈으로 넘어간다.
+        좌석 이동 완료 시점마다(트윈 tick / Seat_Status 수신) 호출된다.
+        """
+        if not self._drive_settle_pending:
+            return
+        if self._any_seat_moving():
+            return
+        self._drive_settle_pending = False
+        print("MODE(주행): 좌석 배치 완료 → 대기(홈) 자동 이동")
+        self._idle_timer.stop()
+        self._set_ui_mode("AMBIENT")
 
     # =====================================================================
     # CAN 수신 → 디지털 트윈 갱신 (RX 스레드에서 QueuedConnection 으로 호출됨 = GUI 스레드 안전)
@@ -507,6 +553,8 @@ class VehicleState(QObject):
             if pinch:
                 print(f"PINCH: {SEAT_LABELS[seat]} 끼임 감지!")
             self.pinchChanged.emit()
+        # 주행 모드 좌석 배치 완료 시 홈 자동 이동(closed-loop 축이 commanded 에 도달한 시점).
+        self._check_drive_settle()
 
     # --- 레이싱휠 → 화면 즉각 반영 (인터록과 무관, 항상) ---
     @Slot(int, int, int)
@@ -694,4 +742,6 @@ class VehicleState(QObject):
             self._tween_timer.stop()
         if done:
             self.seatMovingChanged.emit()   # 도착한 좌석 이동중 표시 해제
+            # 주행 모드 좌석 배치 완료(뒷좌석 슬라이드 트윈 종료) 시 홈 자동 이동.
+            self._check_drive_settle()
         self.seatValuesChanged.emit()

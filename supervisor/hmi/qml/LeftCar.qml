@@ -4,7 +4,7 @@ import "."
 // 왼쪽 "차량" 영역 — QtQuick3D 실시간 3D 디지털 트윈.
 //   · 배경: 루프 없는 컷어웨이 캐빈(Cabin3D). 카메라 고정 3/4 부감(차 모형 그대로, 조향 연동 없음).
 //   · 오버레이: 좌상단 [세로 기어 슬라이드(D/P/R) → 그 아래 엑셀/브레이크 세로 막대] + 하단 중앙 GEAR 텍스트.
-//   · 빈 곳 탭 → 화면 토글(MODE_SELECT ↔ SEAT_OVERVIEW).
+//   · 빈 곳 탭 → 홈(대기) → 모드 → 좌석 → 홈 순환(cycleCarArea).
 Item {
     id: root
 
@@ -22,20 +22,15 @@ Item {
     }
 
     // 빈 곳 탭 (3D 위, 좌상단 컨트롤 아래):
-    //   · AMBIENT : wakeFromAmbient() → ACTIVE 복귀.
-    //   · ACTIVE  : 화면 토글(MODE_SELECT ↔ SEAT_OVERVIEW).
+    //   한 번 누를 때마다 홈(대기) → 모드 → 좌석 → 홈 순환. (cycleCarArea 가 상태 판단)
     MouseArea {
         anchors.fill: parent
-        onClicked: {
-            if (vehicleState.uiMode === "AMBIENT")
-                vehicleState.wakeFromAmbient()
-            else
-                vehicleState.toggleCarArea()
-        }
+        onClicked: vehicleState.cycleCarArea()
     }
 
     // ── 좌상단: 세로 기어 슬라이드(D/P/R) + 그 아래 엑셀/브레이크 세로 막대 ──
-    //   엑셀/브레이크는 인터록 게이트된 값(중립 P에선 0). 세로로 아래→위로 차오른다.
+    //   엑셀/브레이크는 항상 실제 입력값(P에서도 읽어 표시). 실제 바퀴 정지는 CAN 게이트가 담당.
+    //   세로로 아래→위로 차오른다.
     Column {
         id: leftStack
         anchors.left: parent.left
