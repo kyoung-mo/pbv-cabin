@@ -61,6 +61,28 @@ STEER_EMA_ALPHA = 0.40
 
 GEAR_DEBOUNCE_S = 0.15   # 패들 채터링 가드(상승엣지 1회 전이 + 디바운스)
 
+# ── 휠 장치 선택 규칙 ────────────────────────────────────────────────────────
+# pygame 은 Joystick(0) 로 0번을 여는데, HDMI(로컬) 세션에선 0번이 터치패널
+# (wch.cn USB2IIC_CTP_CONTROL, /dev/input/js0)이라 휠 대신 터치를 잡아 축/버튼이 전부 죽는다.
+# SSH 세션에선 터치패널이 없어 휠이 0번으로 잡혀 정상 동작했다. 세션 무관하게 만들려면
+# "0번 고정"이 아니라 "터치패널/IMU 를 배제하고 휠을 골라서" 열어야 한다.
+#
+# [실측 — 휠 모드에 따라 이름/축 수가 바뀜]
+#   · P4X(정상) 모드   : 이름 'Generic X-Box pad',        axes=6  → 매핑 정확(조향=a0/페달=a1/패들=b4,5)
+#   · 그 외(고장) 모드 : 이름 '. Steering Wheel Controller', axes=4  → 페달이 a2/a3 로 붙어 죽음
+# 정상 동작하는 유일한 조건은 "터치패널/IMU 제외 + axes=6". 그래서 선택은 이름이 아니라
+# "배제 후 axes=6 우선" 으로 한다(이름은 로그/보조 힌트로만).
+WHEEL_NAME_EXCLUDE = ("usb2iic", "ctp", "touch", "imu")  # 터치패널/IMU 배제 키워드(필수)
+WHEEL_NAME_HINT = ("x-box", "xbox", "steering wheel", "wheel", "pad")  # 휠일 가능성(보조)
+WHEEL_MIN_AXES = 2   # 조향(axis0)+페달(axis1) 최소 요건
+WHEEL_MODE_AXES = 6  # P4X 정상 모드 축 수 — 이 매핑이 맞는 유일한 모드(우선 선택 + 경고 기준)
+
+# HDMI 세션에선 화면에 뜬 로그를 복붙할 수 없으므로, 조이스틱 스캔/선택 결과를
+# 이 파일에도 남긴다. SSH(MobaXterm)에서 `cat` 으로 바로 확인 가능:
+#   cat /home/pi/project/pbv-cabin/supervisor/hmi/wheel_scan.log
+WHEEL_SCAN_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "wheel_scan.log")
+
 
 class _Filter:
     """median(win) → EMA(alpha). 축 하나당 하나씩."""
@@ -107,23 +129,92 @@ class WheelInput(QObject):
 
         self._js = self._open_and_probe()
 
+    # ── 연결된 조이스틱을 이름으로 순회하며 "휠"을 골라 여는 선택기 ──────────
+    #    (HDMI/SSH 세션마다 js0 주인이 달라지는 문제를 세션 무관하게 해결)
+    @staticmethod
+    def _select_wheel():
+        # 스캔/선택 로그를 화면(print)과 파일 양쪽에 남긴다. HDMI 세션에선 복붙이
+        # 안 되므로 SSH 에서 wheel_scan.log 를 읽어 어떤 장치를 골랐는지 확인한다.
+        report = []
+
+        def emit(line):
+            print(line)
+            report.append(line)
+
+        def flush():
+            try:
+                with open(WHEEL_SCAN_LOG, "w") as f:
+                    f.write("\n".join(report) + "\n")
+            except Exception:
+                pass   # 로그 파일 실패가 휠 동작을 막아선 안 됨
+
+        count = pygame.joystick.get_count()
+
+        # ── 연결된 조이스틱 전체 목록(인덱스 + 이름 + axes/buttons) ──
+        candidates = []   # (idx, js, name, name_lower, axes, buttons)
+        emit(f"WHEEL SCAN: 조이스틱 {count}개 감지")
+        for idx in range(count):
+            js = pygame.joystick.Joystick(idx)
+            js.init()
+            name = js.get_name().strip()
+            axes = js.get_numaxes()
+            buttons = js.get_numbuttons()
+            emit(f"  [{idx}] '{name}'  axes={axes}  buttons={buttons}")
+            candidates.append((idx, js, name, name.lower(), axes, buttons))
+
+        # ── 배제 키워드(터치패널/IMU) 제거 — 이게 HDMI 세션의 핵심 방어 ──
+        pool = [c for c in candidates
+                if not any(k in c[3] for k in WHEEL_NAME_EXCLUDE)]
+        if not pool:
+            listing = "; ".join(f"[{c[0]}]'{c[2]}'(axes={c[4]})" for c in candidates) or "(없음)"
+            emit("WHEEL PICK: 실패 — 배제 후 남은 장치 없음(터치패널/IMU만 연결됨)")
+            flush()
+            raise RuntimeError(
+                f"레이싱휠을 찾지 못함 — 터치패널/IMU 만 잡힘. 연결된 조이스틱: {listing}. "
+                f"휠 USB 연결/전원 확인.")
+
+        # ── 선택: 배제 후, axes=6(P4X 정상 모드) 우선 → 이름 힌트 → 축 최다 ──
+        #    P4X 정상 모드는 이름이 'Generic X-Box pad'/axes=6 이므로 이름에 의존하지 않고
+        #    "axes=6" 을 최우선으로 고른다. HDMI 에서 터치패널은 이미 배제되어 안 잡힌다.
+        def score(c):
+            axes = c[4]
+            has_hint = any(k in c[3] for k in WHEEL_NAME_HINT)
+            return (axes != WHEEL_MODE_AXES,   # axes=6 먼저
+                    not has_hint,               # 휠 이름 힌트 있는 것 먼저
+                    -axes,                      # 그다음 축 많은 것
+                    c[0])                       # 안정적 tie-break(인덱스)
+        pool.sort(key=score)
+        idx, js, name, _, axes, _ = pool[0]
+        tag = "axes=6(P4X 정상)" if axes == WHEEL_MODE_AXES else f"axes={axes}(비정상 모드일 수 있음)"
+        emit(f"WHEEL PICK: [{idx}] '{name}' → {tag} 선택")
+        flush()
+        return js
+
     # ── 디바이스 오픈 + 축/버튼 개수 probe + 매핑 검증 ────────────────────
     def _open_and_probe(self):
         pygame.init()
         pygame.joystick.init()
         if pygame.joystick.get_count() == 0:
-            raise RuntimeError("레이싱휠(joystick)을 찾지 못함")
-        js = pygame.joystick.Joystick(0)
-        js.init()
+            raise RuntimeError("레이싱휠(joystick)을 찾지 못함 — 연결된 조이스틱이 하나도 없음")
+
+        js = self._select_wheel()
 
         self._num_axes = js.get_numaxes()
         self._num_buttons = js.get_numbuttons()
 
-        # ── 시작 로그: 이름 + 축/버튼 개수 + 매핑 ──
+        # ── 시작 로그: 선택된 휠 이름 + 축/버튼 개수 + 매핑 ──
         print(f"WHEEL: '{js.get_name().strip()}'  "
               f"axes={self._num_axes}  buttons={self._num_buttons}")
         print(f"WHEEL MAP: 조향=axis{STEER_AXIS}  페달=axis{PEDAL_AXIS}  "
               f"기어업=btn{GEAR_UP_BUTTON}  기어다운=btn{GEAR_DOWN_BUTTON}")
+
+        # ── 모드 경고: 이 매핑(조향=a0/페달=a1/패들=b4,5)은 휠이 P4X(D-INPUT,
+        #    axes=6) 모드일 때만 맞다. 다른 모드면 axes 수가 달라 페달이 엉뚱한
+        #    축에 붙어 조향/엑셀/브레이크가 죽는다. 축 수가 다르면 크게 경고한다.
+        if self._num_axes != WHEEL_MODE_AXES:
+            print(f"!! WHEEL 경고: axes={self._num_axes} (기대 {WHEEL_MODE_AXES}). "
+                  f"휠 모드가 P4X(D-INPUT)가 아닐 수 있음 → 페달/기어가 안 먹으면 "
+                  f"휠을 P4X 로 바꾸고 USB 재연결하라.")
 
         # ── 매핑 인덱스 범위 검증 ──
         need_axis = max(STEER_AXIS, PEDAL_AXIS)
