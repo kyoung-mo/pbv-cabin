@@ -27,14 +27,28 @@ Node {
     // 이동 표시(보간 중 하이라이트) — Cabin3D 에서 vehicleState.seatMoving + Cfg 주입.
     property bool moving: false           // 이 좌석이 목표까지 이동(보간) 중인가
     property bool pinch: false            // 끼임(Pinch_Detected) 수신 — 빨간 경고 글로우
+    property bool estop: false            // 과전류 긴급정지 — 빨강~핑크 깜빡임 경고
     property bool showIndicator: true     // 표시 on/off (Cfg.showMoveIndicator)
     property color glowColor: "#3B82F6"   // 하이라이트 색(이동)
-    // 끼임이면 빨강·강조, 아니면 이동 시 파랑.
-    property real glow: pinch ? 1.0 : ((moving && showIndicator) ? 1.0 : 0.0)
-    readonly property color effGlowColor: pinch ? "#ff3b30" : glowColor
-    Behavior on glow { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
-    // 이동/끼임 시 클레이 표면에 emissive 글로우. 끼임은 더 강하게(0.9), 이동은 0.6.
-    readonly property real glowScale: pinch ? 0.9 : 0.6
+
+    // 상태 우선순위: 과전류 긴급정지(깜빡) > 끼임(빨강 고정) > 이동(파랑).
+    // 긴급정지 깜빡임 펄스(0.2↔1.0) — estop 동안만 무한 반복.
+    property real estopPulse: 1.0
+    SequentialAnimation on estopPulse {
+        running: seat.estop
+        loops: Animation.Infinite
+        NumberAnimation { from: 0.2; to: 1.0; duration: 360; easing.type: Easing.InOutSine }
+        NumberAnimation { from: 1.0; to: 0.2; duration: 360; easing.type: Easing.InOutSine }
+    }
+    // 이동/끼임용 부드러운 글로우(estop 이 아닐 때 사용).
+    property real baseGlow: pinch ? 1.0 : ((moving && showIndicator) ? 1.0 : 0.0)
+    Behavior on baseGlow { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
+
+    readonly property real glow: estop ? estopPulse : baseGlow
+    // 긴급정지=빨강~핑크, 끼임=빨강, 아니면 이동 파랑.
+    readonly property color effGlowColor: estop ? "#ff2d6a" : (pinch ? "#ff3b30" : glowColor)
+    // emissive 글로우 세기 — 긴급정지 최강(1.0), 끼임 0.9, 이동 0.6.
+    readonly property real glowScale: estop ? 1.0 : (pinch ? 0.9 : 0.6)
     readonly property vector3d glowVec: Qt.vector3d(effGlowColor.r * glow * glowScale,
                                                     effGlowColor.g * glow * glowScale,
                                                     effGlowColor.b * glow * glowScale)

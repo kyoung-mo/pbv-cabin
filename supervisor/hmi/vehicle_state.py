@@ -84,6 +84,7 @@ class VehicleState(QObject):
     seatMovingChanged = Signal()  # 좌석의 이동(보간) 상태 집합이 바뀜
     uiModeChanged = Signal()      # 화면 상태(ACTIVE/AMBIENT) 전환
     pinchChanged = Signal()       # 좌석 끼임(Pinch_Detected) 집합이 바뀜
+    estopChanged = Signal()       # 좌석 과전류 긴급정지 상태 집합이 바뀜
     driveStatusChanged = Signal() # Drive_Status(현재속도 등) 수신 반영
     wheelInputChanged = Signal()  # 레이싱휠 조향/페달 실시간 입력(화면 표시용)
 
@@ -134,6 +135,9 @@ class VehicleState(QObject):
 
         # 좌석별 끼임 경고(Seat_Status.*_Pinch_Detected 수신 반영)
         self._pinch = {seat: False for seat in SEAT_LABELS}
+        # 좌석별 과전류 긴급정지(각 좌석 과전류 센서 → 긴급정지). CAN 수신 방식 미정 →
+        #   지금은 setSeatEstop(seat, on) 슬롯으로만 세팅(테스트/후속 CAN 배선 훅).
+        self._estop = {seat: False for seat in SEAT_LABELS}
         # Drive_Status 반영(현재 속도 RPM)
         self._current_velocity = 0.0
         # 레이싱휠 실시간 입력(화면 표시용) — 인터록과 무관하게 항상 갱신
@@ -599,6 +603,34 @@ class VehicleState(QObject):
         return any(self._pinch.values())
 
     anyPinch = Property(bool, _get_any_pinch, notify=pinchChanged)
+
+    # --- 과전류 긴급정지(E-stop) Property/훅: QML 은 seatEstop[<seat>] 로 바인딩 ---
+    #   과전류 → 해당 좌석 긴급정지 시 3D 좌석이 빨강~핑크로 깜빡인다(Seat3D.estop).
+    #   CAN 수신 방식이 정해지면 그 디코드 지점에서 setSeatEstop(seat, on) 을 호출하면 된다.
+    #   (예: onSeatStatus 에 과전류 비트 추가, 또는 SafeAbort Source_Id 매핑 등.)
+    def _get_seat_estop(self):
+        return dict(self._estop)
+
+    seatEstop = Property("QVariantMap", _get_seat_estop, notify=estopChanged)
+
+    def _get_any_estop(self):
+        return any(self._estop.values())
+
+    anyEstop = Property(bool, _get_any_estop, notify=estopChanged)
+
+    @Slot(str, bool)
+    def setSeatEstop(self, seat, on):
+        """좌석 과전류 긴급정지 상태 세팅 훅(후속 CAN 배선/테스트에서 호출).
+
+        seat: SEAT_LABELS 키('driver'/'passenger'/'rear_left'/'rear_right').
+        """
+        if seat not in self._estop:
+            return
+        if self._estop[seat] != bool(on):
+            self._estop[seat] = bool(on)
+            if on:
+                print(f"E-STOP: {SEAT_LABELS[seat]} 과전류 긴급정지!")
+            self.estopChanged.emit()
 
     # --- Drive_Status: 현재 속도(RPM) ---
     def _get_current_velocity(self):

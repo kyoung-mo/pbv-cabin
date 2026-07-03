@@ -138,6 +138,7 @@ Item {
                     axis2: root.curPose ? root.curPose.axis2 : 0
                     moving: vehicleState.seatMoving[vehicleState.selectedSeat] === true
                     pinch: vehicleState.seatPinch[vehicleState.selectedSeat] === true
+                    estop: vehicleState.seatEstop[vehicleState.selectedSeat] === true
                     showIndicator: Cfg.showMoveIndicator
                     glowColor: Cfg.moveGlowColor
                 }
