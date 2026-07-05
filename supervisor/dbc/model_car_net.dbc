@@ -84,11 +84,13 @@ BO_ 529 Passenger_Seat_Status: 3 Front_Zone_ECU
  SG_ Psgr_Pinch_Detected : 16|1@1+ (1,0) [0|1] ""  Central_Supervisor
  SG_ Curr_Psgr_Rotate : 8|8@1+ (1,0) [0|180] "Degree"  Central_Supervisor
 
-BO_ 544 Rear_Left_Seat_Status: 2 Rear_Zone_ECU
+BO_ 544 Rear_Left_Seat_Status: 3 Rear_Zone_ECU
+ SG_ Curr_RL_Slide : 16|8@1+ (1,0) [0|100] "mm" Central_Supervisor
  SG_ Curr_RL_Recline : 0|8@1+ (1,0) [0|180] "Degree"  Central_Supervisor
  SG_ RL_Pinch_Detected : 8|1@1+ (1,0) [0|1] ""  Central_Supervisor
 
-BO_ 545 Rear_Right_Seat_Status: 2 Rear_Zone_ECU
+BO_ 545 Rear_Right_Seat_Status: 3 Rear_Zone_ECU
+ SG_ Curr_RR_Slide : 16|8@1+ (1,0) [0|100] "mm" Central_Supervisor
  SG_ Curr_RR_Recline : 0|8@1+ (1,0) [0|180] "Degree"  Central_Supervisor
  SG_ RR_Pinch_Detected : 8|1@1+ (1,0) [0|1] ""  Central_Supervisor
 
