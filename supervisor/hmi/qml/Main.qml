@@ -68,4 +68,69 @@ ApplicationWindow {
         anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
         height: Theme.navHeight
     }
+
+    // 뒷좌석 슬라이드 원점 정렬(호밍) 중 — 전체 화면 잠금 오버레이.
+    //   vehicleState.homingActive 동안 뒤 입력을 막고 안내를 띄운다(모드/좌석 명령 겹침 방지).
+    Rectangle {
+        id: homingOverlay
+        anchors.fill: parent
+        z: 1000
+        visible: vehicleState.homingActive
+        color: "#cc0b0f14"
+        // 뒤 콘텐츠 입력 완전 차단
+        MouseArea { anchors.fill: parent; hoverEnabled: true; onClicked: {} }
+
+        Column {
+            anchors.centerIn: parent
+            width: Math.min(parent.width * 0.72, 660)
+            spacing: 22
+
+            Rectangle {   // 회전 스피너
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 54; height: 54; radius: 27
+                color: "transparent"; border.color: "#4f9dff"; border.width: 5
+                Rectangle {
+                    width: 12; height: 12; radius: 6; color: "#4f9dff"
+                    anchors.top: parent.top; anchors.horizontalCenter: parent.horizontalCenter
+                }
+                RotationAnimation on rotation {
+                    running: homingOverlay.visible
+                    loops: Animation.Infinite; from: 0; to: 360; duration: 900
+                }
+            }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "뒷좌석 슬라이드 원점 정렬"
+                color: "white"; font.pixelSize: 30; font.bold: true
+            }
+            // 단계별 안내(왼쪽/오른쪽) — vehicleState.homingPrompt
+            Text {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                lineHeight: 1.3
+                text: vehicleState.homingPrompt
+                color: "#c9d2df"; font.pixelSize: 18
+            }
+            // 확인/다음 버튼 — 단계 진행(왼쪽 완료→오른쪽, 오른쪽 완료→주행 원복)
+            Rectangle {
+                id: confirmBtn
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: confirmTxt.implicitWidth + 68
+                height: 62; radius: 12
+                color: confirmMa.pressed ? "#2f6fd0" : "#4f9dff"
+                Text {
+                    id: confirmTxt
+                    anchors.centerIn: parent
+                    text: vehicleState.homingConfirmText
+                    color: "white"; font.pixelSize: 20; font.bold: true
+                }
+                MouseArea {
+                    id: confirmMa
+                    anchors.fill: parent
+                    onClicked: vehicleState.confirmHomingStep()
+                }
+            }
+        }
+    }
 }

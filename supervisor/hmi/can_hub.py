@@ -144,11 +144,17 @@ class CanHub(QObject):
         self._rolling = (self._rolling + 1) & 0x0F   # 15 → 0 wrap
         return v
 
-    def send_seat_cmd(self, seat, recline, axis2, cargo_lamp=0):
+    def send_seat_cmd(self, seat, recline, axis2, cargo_lamp=0, slide_raw=None):
         """좌석 UI 1개의 목표포즈(recline + 회전/슬라이드)를 해당 *_Seat_Cmd 로 송신.
 
         한 프레임에 두 축을 모두 싣는다(DBC 구조). 좌석↔메시지 매핑은 SEAT_CMD_DEF.
         Driver_Seat_Cmd 만 Rolling_Counter/Checksum 을 앱에서 채운다(cantools 자동 X).
+
+        slide_raw(뒷좌석 전용): 254(HOME)/255(REZERO) 같은 raw 슬라이드 센티넬 전송용.
+          DBC 의 RL/RR_Slide_Position 은 0~100mm 라 cantools 인코딩이 센티넬(253~255)을 100 으로
+          클램프한다. 리어 ECU(slide4)는 이 바이트를 raw uint8_t 로 읽어 254/255 를 직접 비교하므로,
+          DBC 를 건드리지 않고 인코딩 후 슬라이드 바이트(byte1 = RL/RR_Slide_Position, bit 8|8)를
+          직접 덮어쓴다. (driver Checksum 을 byte3 에 직접 채우는 것과 동일한 hand-pack 패턴.)
         """
         msg_name, recline_sig, axis2_sig = SEAT_CMD_DEF[seat]
         msg = self._db.get_message_by_name(msg_name)
@@ -164,6 +170,11 @@ class CanHub(QObject):
             sig["Cargo_Lamp_Status"] = int(cargo_lamp)
 
         data = bytearray(msg.encode(sig, strict=True))
+
+        if slide_raw is not None:
+            # 뒷좌석 슬라이드 센티넬(254/255): DBC 범위(0~100) 밖이라 byte1 을 직접 덮어쓴다.
+            #   RL_Slide_Position / RR_Slide_Position 은 둘 다 bit 8|8 → byte index 1.
+            data[1] = int(slide_raw) & 0xFF
 
         if seat == "driver":
             # ── Checksum 방식: ecu-front can.c 와 동일 — 8비트 합 ──

@@ -9,6 +9,8 @@
   · CanHub 가 None(셀프테스트/CAN 미연결)이면 송신부는 콘솔 출력으로 폴백한다.
 """
 
+import time
+
 from PySide6.QtCore import QObject, Signal, Property, Slot, QTimer
 
 
@@ -39,6 +41,35 @@ TWEEN_INTERVAL_MS = 16
 
 # 대기(AMBIENT) 진입 — 이 시간(ms) 동안 "입력"이 없으면 대기 모드로. (기어 조작은 입력 제외)
 IDLE_TIMEOUT_MS = 10000
+
+# ── 뒷좌석 슬라이드 호밍/센티넬 (리어 ECU slide4 정본 기준) ──────────────────────
+#   slide4 는 부팅 호밍이 꺼져 있어(SLIDE_HOMING=0) 전원 시 놓인 위치를 그냥 0으로 간주한다.
+#   → 절대위치(0~100mm)를 쓰기 전에 반드시 254(호밍)로 물리 원점을 잡아야 한다(이게 없으면
+#     "리니어가 엉뚱하게 움직인다"는 증상이 난다).
+#   254=호밍(오른쪽 끝=운전석쪽으로 밀어 그 위치를 0), 255=재영점(현재 위치를 0으로, 이동 없음).
+#   253(HOLD)은 slide4 미구현이라 supervisor 는 쓰지 않는다 — 슬라이드를 '유지'하려면 현재
+#     절대위치를 그대로 재전송한다(target==현재 → ECU 가 안 움직임). 그래서 리클라인만 바꿔도
+#     슬라이드는 (호밍만 돼 있으면) 안 움직인다.
+SLIDE_HOME_CMD = 254
+SLIDE_REZERO_CMD = 255
+REAR_SEATS = ("rear_left", "rear_right")
+# 원점 정렬은 사용자 확인 스텝으로 진행한다(자동 완료판정 X):
+#   왼쪽 정렬(자동 시작) → [확인] → 오른쪽 정렬 → [확인] → 주행 자세 원복.
+#   호밍이 ~2분 걸리고 방향(오른쪽 끝=앞쪽)도 눈으로 봐야 하므로, 사람이 보고 단계를 넘긴다.
+
+# 뒷좌석 슬라이드 실측 이동 속도 ≈ 3mm/s(slide4 STEP_MIN_US=800, 가속 포함). 트윈(3D) 시간을
+#   이 값으로 잡으면 ① 3D 가 실물과 동기 ② rear_left 슬라이드가 '진짜로' 끝난 뒤에야 rear_right
+#   가 나가서 **두 리니어 액추에이터가 동시에 움직이지 않는다**(하드웨어 제약: 양쪽 동시 구동 금지).
+#   실측보다 살짝 느리게(보수적) 잡아 겹침을 확실히 막는다.
+SLIDE_MS_PER_MM = 450       # ≈2.2mm/s (실측 ~3mm/s 보다 느리게 = 안전여유)
+SLIDE_MOVE_MARGIN_MS = 800  # 가속/정지 여유(고정)
+
+# ── 뒷좌석 슬라이드 직렬화(두 리니어 동시 구동 절대 금지) ────────────────────────
+#   시간 추정만으로는 실물(부하로 느려짐)에서 겹칠 수 있어, 실제 ECU 상태로 완료를 판정한다.
+#   이동 중엔 리어 상태(0x220/0x221) 송신이 끊기고(MotionTask tight-loop 가 StatusTask 기아),
+#   완료되면 재개된다 → 명령 후 가드 시간 지난 뒤 처음 들어온 리어 상태 = 완료. 타이머는 폴백.
+SLIDE_DONE_GUARD_MS = 700      # 명령 직후 이 시간 내 리어 상태는 '이동 시작 전 잔여'로 무시
+SLIDE_MOVE_TIMEOUT_MS = 70000  # 폴백: 최악 풀스트로크(~50s, 부하 시) + 여유. 상태 못 잡을 때만
 
 # ── 모드 프리셋 ──────────────────────────────────────────────────────────────
 # 모드 타일을 누르면 아래 값으로 4개 좌석 target 을 세팅하고 즉시 "적용"(트윈)한다.
@@ -85,6 +116,7 @@ class VehicleState(QObject):
     uiModeChanged = Signal()      # 화면 상태(ACTIVE/AMBIENT) 전환
     pinchChanged = Signal()       # 좌석 끼임(Pinch_Detected) 집합이 바뀜
     estopChanged = Signal()       # 좌석 과전류 긴급정지 상태 집합이 바뀜
+    homingChanged = Signal()      # 뒷좌석 슬라이드 호밍(원점 정렬) 진행 상태가 바뀜
     driveStatusChanged = Signal() # Drive_Status(현재속도 등) 수신 반영
     wheelInputChanged = Signal()  # 레이싱휠 조향/페달 실시간 입력(화면 표시용)
 
@@ -101,10 +133,14 @@ class VehicleState(QObject):
         # 주행 모드 선택 후 "좌석 배치 완료 시 대기(홈)로 자동 이동" 대기 플래그.
         #   selectMode(주행)에서 켜고, 좌석 이동이 모두 끝나면 _check_drive_settle 이 끈다.
         self._drive_settle_pending = False
-        # 모드 적용 시 뒷좌석 슬라이드를 "왼쪽 먼저 → 왼쪽 완료 후 오른쪽" 순서로 처리.
-        #   rear_left 슬라이드 트윈이 진행 중이면 rear_right 명령을 여기 담아두고,
-        #   rear_left 트윈이 끝나는 순간(_on_tween_tick) 비로소 rear_right 를 적용한다.
-        self._pending_rear_right = False
+        # 뒷좌석 슬라이드 직렬화 상태(두 리니어 동시 구동 금지).
+        #   _slide_busy : 현재 구동 중인 좌석('rear_left'/'rear_right') 또는 None.
+        #   _slide_queue: 구동 대기 좌석 목록. busy 가 완료되면 큐에서 다음을 시작.
+        #   완료 판정 = 리어 상태 재개(정확) + 데드라인 타임아웃(폴백).
+        self._slide_busy = None
+        self._slide_queue = []
+        self._slide_started = 0.0     # busy 명령 시각(ms) — 상태재개 가드용
+        self._slide_deadline = 0.0    # busy 타임아웃 시각(ms)
         self._selected_seat = "driver"
         # 좌석별 각도값 (재진입해도 유지되도록 여기에만 저장).
         # 각 축은 target(목표) / current(3D가 실제로 가 있는 값) 두 개로 분리한다.
@@ -158,6 +194,19 @@ class VehicleState(QObject):
         self._idle_timer = QTimer(self)
         self._idle_timer.setSingleShot(True)        # start()마다 카운트다운 재시작
         self._idle_timer.timeout.connect(self._on_idle_timeout)
+
+        # 뒷좌석 슬라이드 원점(호밍) 상태 — 사용자 확인 스텝 시퀀스.
+        #   _rear_homed: 축별 물리 원점 확정 여부.
+        #   _home_seq  : "" (없음) / "left" (왼쪽 정렬 중) / "right" (오른쪽 정렬 중).
+        #                확인 버튼(confirmHomingStep)으로 다음 단계 진행.
+        self._rear_homed = {seat: False for seat in REAR_SEATS}
+        self._home_seq = ""
+        # 원점 정렬 후 주행 자세 원복이 끝나면 모드 선택 화면으로 넘어가기 위한 플래그.
+        self._post_home_to_modes = False
+        # 뒷좌석 슬라이드 직렬화 완료 폴백 타이머(상태 재개를 못 잡을 때만 사용).
+        self._slide_timer = QTimer(self)
+        self._slide_timer.setInterval(200)
+        self._slide_timer.timeout.connect(self._slide_poll)
 
     # =====================================================================
     # gear
@@ -256,6 +305,10 @@ class VehicleState(QObject):
     @Slot(str)
     def selectMode(self, mode):
         self._register_activity()
+        # 인터록: 원점 정렬(호밍) 중에는 모드 변경 불가(명령 겹침 방지).
+        if self._home_seq:
+            print("BLOCKED: 원점 정렬 중이라 모드 변경 불가")
+            return
         # 인터록: 주행/후진 중(기어 D/R)에는 모드 변경 불가.
         if self._gear in ("D", "R"):
             print("BLOCKED: 주행/후진 중이라 모드 변경 불가")
@@ -353,12 +406,15 @@ class VehicleState(QObject):
         self.uiModeChanged.emit()
 
     def _register_activity(self):
-        """기어를 제외한 '입력'마다 호출 — 무입력 타이머 리셋(+AMBIENT면 깨우기)."""
+        """기어를 제외한 '입력'마다 호출 — AMBIENT면 깨우기.
+
+        10초 무입력 자동 홈(AMBIENT) 전환은 비활성화됨(사용자 요청): 좌석 이동 도중 홈으로
+        튀는 것을 막기 위해 무입력 타이머를 더 이상 무장하지 않는다. 홈 전환은 홈 버튼 등 수동만.
+        """
         # 사용자가 직접 조작하면 주행 모드 '자동 대기 이동'은 취소(원치 않는 홈 이동 방지).
         self._drive_settle_pending = False
         if self._ui_mode == "AMBIENT":
             self._set_ui_mode("ACTIVE")
-        self._idle_timer.start(IDLE_TIMEOUT_MS)
 
     @Slot()
     def wakeFromAmbient(self):
@@ -386,12 +442,13 @@ class VehicleState(QObject):
         self._set_screen("MODE_SELECT")
 
     def _on_idle_timeout(self):
-        """10초 무입력 경과. 기어 P 일 때만 AMBIENT 진입(주행/후진 중 대기 방지)."""
-        if self._gear != "P":
-            # 주행/후진 중 — 대기 미진입. 다음 기회를 위해 타이머만 재무장.
-            self._idle_timer.start(IDLE_TIMEOUT_MS)
-            return
-        self._set_ui_mode("AMBIENT")
+        """(비활성) 10초 무입력 자동 홈(AMBIENT) 전환 — 사용자 요청으로 끔.
+
+        무입력 타이머를 더 이상 시작하지 않으므로 호출되지 않는다. 되살리려면
+        _register_activity 에서 self._idle_timer.start(IDLE_TIMEOUT_MS) 를 복구하고
+        아래 본문을 원래대로 되돌리면 된다.
+        """
+        return
 
     # =====================================================================
     # selected_seat 및 현재좌석 파생 Property (SEAT_DETAIL이 binding으로 사용)
@@ -490,6 +547,16 @@ class VehicleState(QObject):
         # 뒷좌석 슬라이드(open-loop) 로컬 트윈 진행 중
         for (seat, _axis) in self._tweens:
             moving[seat] = True
+        # 뒷좌석 슬라이드 원점 정렬 진행 중인 축(왼쪽/오른쪽 순차)
+        if self._home_seq == "left":
+            moving["rear_left"] = True
+        elif self._home_seq == "right":
+            moving["rear_right"] = True
+        # 뒷좌석 슬라이드 직렬화: 구동 중 + 대기 중인 좌석
+        if self._slide_busy:
+            moving[self._slide_busy] = True
+        for seat in self._slide_queue:
+            moving[seat] = True
         # closed-loop 축: 송신한 commanded 까지 수신 current 가 아직 도달 못함 = 이동중
         #   recline(전 좌석) + 앞좌석 회전(axis2)
         for seat, ax in self._seat_values.items():
@@ -518,9 +585,6 @@ class VehicleState(QObject):
         """
         if not self._drive_settle_pending:
             return
-        # 오른쪽 뒷좌석이 아직 대기 중(왼쪽 슬라이드 완료 대기)이면 배치 미완료로 본다.
-        if self._pending_rear_right:
-            return
         if self._any_seat_moving():
             return
         self._drive_settle_pending = False
@@ -544,6 +608,11 @@ class VehicleState(QObject):
         """
         if seat not in self._seat_values:
             return
+        # 뒷좌석 슬라이드 직렬화 완료 판정: 구동 중엔 리어 상태가 끊겼다 완료 시 재개된다.
+        #   가드 시간 지난 뒤 처음 들어온 리어(0x220/0x221) 상태 = 현재 슬라이드 완료 → 다음 시작.
+        if self._slide_busy is not None and seat in REAR_SEATS:
+            if time.monotonic() * 1000.0 - self._slide_started >= SLIDE_DONE_GUARD_MS:
+                self._finish_rear_slide("상태재개")
         changed = False
         r = self._seat_values[seat]["recline"]
         if r["current"] != recline:
@@ -565,6 +634,7 @@ class VehicleState(QObject):
             self.pinchChanged.emit()
         # 주행 모드 좌석 배치 완료 시 홈 자동 이동(closed-loop 축이 commanded 에 도달한 시점).
         self._check_drive_settle()
+        self._check_post_home()   # 원점 정렬 후 원복 완료 시 모드 선택 화면으로
 
     # --- 레이싱휠 → 화면 즉각 반영 (인터록과 무관, 항상) ---
     @Slot(int, int, int)
@@ -677,19 +747,25 @@ class VehicleState(QObject):
             return False
         return True
 
-    def _send_seat(self, seat):
+    def _send_seat(self, seat, slide_override=None):
         """선택 좌석의 현재 target(recline + axis2)을 *_Seat_Cmd 로 encode→can0 송신.
 
         좌석 Cmd 는 한 프레임에 두 축을 모두 싣는다(DBC 구조). CanHub.SEAT_CMD_DEF 가
         좌석키→메시지/시그널을 매핑한다. CAN 미연결 시 콘솔로 폴백.
+
+        slide_override(뒷좌석 전용): 254=호밍/255=재영점 같은 raw 슬라이드 센티넬.
+          can_hub 가 인코딩 후 슬라이드 바이트를 직접 덮어써 보낸다(DBC 무변경). byte0=리클라인
+          target 은 그대로 실려 호밍/재영점 프레임에서도 서보가 0°로 튀지 않는다
+          (slide4 규칙: recline 은 매 프레임 항상 적용).
         """
         recline = self._seat_values[seat]["recline"]["target"]
         axis2 = self._seat_values[seat]["axis2"]["target"]
         if self._can:
-            self._can.send_seat_cmd(seat, recline, axis2)
+            self._can.send_seat_cmd(seat, recline, axis2, slide_raw=slide_override)
         else:
             name = "회전" if seat in FRONT_SEATS else "슬라이드"
-            print(f"[NO-CAN] SEAT_CMD {SEAT_LABELS[seat]} 리클라인={recline} {name}={axis2}")
+            shown = slide_override if slide_override is not None else axis2
+            print(f"[NO-CAN] SEAT_CMD {SEAT_LABELS[seat]} 리클라인={recline} {name}={shown}")
 
     def _axis2_closed_loop(self, seat):
         """앞좌석 회전 = Curr_*_Rotate 피드백 있음(closed-loop). 뒷좌석 슬라이드 = 없음(open-loop)."""
@@ -712,11 +788,18 @@ class VehicleState(QObject):
         · axis2(앞=회전)  : closed-loop — 수신 Curr_*_Rotate 로 current 갱신.
         · axis2(뒤=슬라이드): open-loop — 피드백 없어 로컬 트윈으로 시각화.
         """
+        if self._home_seq:
+            print(f"BLOCKED(seat): 원점 정렬 중 좌석 변경 거부 ({SEAT_LABELS[seat]})")
+            return
         if not self._seat_cmd_approved(seat):
             print(f"BLOCKED(seat): 주행/후진 중 좌석 변경 거부 ({SEAT_LABELS[seat]})")
             return
-        self._send_seat(seat)
-        self._mark_commit(seat, axis)
+        # 뒷좌석 슬라이드 이동은 직렬화 큐로만(두 리니어 동시 구동 금지).
+        if axis == "axis2" and seat in REAR_SEATS:
+            self._enqueue_rear_slide(seat)
+        else:
+            self._send_seat(seat)
+            self._mark_commit(seat, axis)
         self.seatMovingChanged.emit()
 
     def _apply_seat_cmd(self, seat):
@@ -726,6 +809,178 @@ class VehicleState(QObject):
         self._send_seat(seat)
         self._mark_commit(seat, "recline")
         self._mark_commit(seat, "axis2")
+
+    # =====================================================================
+    # 뒷좌석 슬라이드 직렬화 — 두 리니어 액추에이터 동시 구동 절대 금지.
+    #   한 슬라이드가 구동 중이면 다른 슬라이드는 큐에서 대기하고, 완료(리어 상태 재개 감지
+    #   또는 타임아웃)된 뒤에야 시작한다. 모드 변경/원복/수동 적용 모두 이 경로로만 슬라이드를 움직인다.
+    # =====================================================================
+    def _enqueue_rear_slide(self, seat):
+        """뒷좌석 슬라이드 이동을 직렬화 큐에 넣는다(비어 있으면 즉시 시작)."""
+        if seat == self._slide_busy or seat in self._slide_queue:
+            return
+        self._slide_queue.append(seat)
+        self._pump_rear_slide()
+
+    def _pump_rear_slide(self):
+        """구동 중인 슬라이드가 없으면 큐에서 다음 좌석을 꺼내 시작."""
+        if self._slide_busy is not None:
+            return
+        if not self._slide_queue:
+            self._slide_timer.stop()
+            return
+        self._start_rear_slide(self._slide_queue.pop(0))
+
+    def _start_rear_slide(self, seat):
+        """뒷좌석 1개의 슬라이드 프레임(리클라인+슬라이드)을 실제 송신하고 busy 로 잠근다."""
+        self._slide_busy = seat
+        now = time.monotonic() * 1000.0
+        self._slide_started = now
+        self._slide_deadline = now + SLIDE_MOVE_TIMEOUT_MS
+        self._send_seat(seat)                # recline + slide 한 프레임
+        self._mark_commit(seat, "recline")   # 리클라인(closed-loop) commanded
+        self._mark_commit(seat, "axis2")     # 슬라이드(open-loop) 3D 트윈 시작
+        print(f"SLIDE: {SEAT_LABELS[seat]} 슬라이드 구동 시작(직렬화)")
+        if not self._slide_timer.isActive():
+            self._slide_timer.start()
+        self.seatMovingChanged.emit()
+
+    def _finish_rear_slide(self, reason):
+        """현재 슬라이드 완료 → 다음 대기 좌석 시작(직렬). 완료 콜백들도 갱신."""
+        seat = self._slide_busy
+        if seat is None:
+            return
+        self._slide_busy = None
+        print(f"SLIDE: {SEAT_LABELS[seat]} 슬라이드 완료({reason})")
+        self.seatMovingChanged.emit()
+        self._pump_rear_slide()          # 대기 중이면 다음 슬라이드 시작
+        self._check_drive_settle()
+        self._check_post_home()
+
+    def _slide_poll(self):
+        """폴백: 리어 상태 재개를 못 잡아도 데드라인 지나면 완료로 간주(직렬 멈춤 방지)."""
+        if self._slide_busy is None:
+            self._slide_timer.stop()
+            return
+        if time.monotonic() * 1000.0 >= self._slide_deadline:
+            self._finish_rear_slide("타임아웃")
+
+    # =====================================================================
+    # 뒷좌석 슬라이드 호밍(원점 정렬) — slide4 는 부팅 호밍이 꺼져 있어 필수.
+    #   사용자 확인 스텝: 왼쪽 정렬 → [확인] → 오른쪽 정렬 → [확인] → 주행 자세 원복.
+    #   진행 중엔 homingActive=True → QML 오버레이가 화면을 잠그고 확인 버튼만 노출한다.
+    # =====================================================================
+    def _get_homing_active(self):
+        return self._home_seq != ""
+
+    homingActive = Property(bool, _get_homing_active, notify=homingChanged)
+
+    def _get_homing_prompt(self):
+        if self._home_seq == "left":
+            return ("① 왼쪽 뒷좌석 슬라이드가 운전석 쪽 끝으로 이동합니다.\n"
+                    "끝에 붙어 멈추면 아래 버튼을 누르세요 — 그 위치가 원점(0)이 됩니다.")
+        if self._home_seq == "right":
+            return ("② 오른쪽 뒷좌석 슬라이드가 운전석 쪽 끝으로 이동합니다.\n"
+                    "끝에 붙어 멈추면 아래 버튼을 누르세요 — 그 위치가 원점(0)이 됩니다.")
+        return ""
+
+    homingPrompt = Property(str, _get_homing_prompt, notify=homingChanged)
+
+    def _get_homing_confirm_text(self):
+        if self._home_seq == "left":
+            return "왼쪽 여기가 원점 · 오른쪽 진행 →"
+        if self._home_seq == "right":
+            return "오른쪽 여기가 원점 · 주행 자세로 →"
+        return ""
+
+    homingConfirmText = Property(str, _get_homing_confirm_text, notify=homingChanged)
+
+    @Slot()
+    def homeRearSlides(self):
+        """원점 정렬 시퀀스 시작(왼쪽부터). 앱 시작 자동 + '원점 잡기' 버튼에서 호출.
+
+        · 주행/후진(D/R) 중 거부. · CAN 미연결(콘솔)이면 즉시 homed 처리하고 스킵.
+        · 이후 진행은 confirmHomingStep(확인 버튼)이 담당한다(왼쪽→오른쪽→원복).
+        """
+        if self._gear in ("D", "R"):
+            print("BLOCKED(home): 주행/후진 중 원점 정렬 불가")
+            return
+        if self._home_seq != "":
+            return   # 이미 진행 중
+        if self._can is None:
+            for seat in REAR_SEATS:
+                self._rear_homed[seat] = True
+            print("HOME: CAN 없음 — 원점 정렬 건너뜀(콘솔 모드)")
+            return
+        self._rear_homed = {seat: False for seat in REAR_SEATS}
+        self._home_seq = "left"
+        self._send_seat("rear_left", slide_override=SLIDE_HOME_CMD)
+        print("HOME: ① 왼쪽 뒷좌석 원점 정렬 시작(254) — 완료되면 확인 버튼")
+        self.homingChanged.emit()
+        self.seatMovingChanged.emit()
+
+    def _mark_home_done(self, seat):
+        """해당 좌석 원점 확정: 슬라이드 0(원점)으로 트윈 값도 맞춘다."""
+        self._rear_homed[seat] = True
+        ax = self._seat_values[seat]["axis2"]
+        ax["current"] = 0
+        ax["commanded"] = 0
+        ax["target"] = 0
+
+    @Slot()
+    def confirmHomingStep(self):
+        """오버레이 확인 버튼: 지금 끝에 붙어 멈춘 위치를 255(재영점)로 '여기가 0' 확정.
+
+        255(REZERO)는 slide4 에서 '현재 위치=0 선언 + 진행 중이던 호밍(오버드라이브) 즉시 취소'다.
+        그래서 확인을 누르는 순간 진동(오버드라이브 갈림)이 멈추고 원점이 그 자리에 고정된다.
+          left  → 왼쪽 재영점 후 오른쪽을 끝으로 이동(254) 시작.
+          right → 오른쪽 재영점 후 주행 자세로 원복(왼쪽 30 → 오른쪽 30 순차) → 모드 선택 화면.
+        """
+        if self._home_seq == "left":
+            self._send_seat("rear_left", slide_override=SLIDE_REZERO_CMD)  # 여기가 0
+            self._mark_home_done("rear_left")
+            self._home_seq = "right"
+            self._send_seat("rear_right", slide_override=SLIDE_HOME_CMD)   # 오른쪽 끝으로 이동
+            print("HOME: 왼쪽 재영점(255) → ② 오른쪽 끝으로 이동 시작(254)")
+            self.homingChanged.emit()
+            self.seatValuesChanged.emit()
+            self.seatMovingChanged.emit()
+        elif self._home_seq == "right":
+            self._send_seat("rear_right", slide_override=SLIDE_REZERO_CMD)  # 여기가 0
+            self._mark_home_done("rear_right")
+            self._home_seq = ""
+            print("HOME: 오른쪽 재영점(255) → ③ 주행 자세로 원복")
+            self.homingChanged.emit()
+            self.seatValuesChanged.emit()
+            self.seatMovingChanged.emit()
+            self._restore_drive_pose()
+
+    def _restore_drive_pose(self):
+        """원점 정렬 완료 후 주행 자세로 원복(주행 프리셋을 4좌석에 적용).
+
+        원점이 잡혀 있어 절대위치(뒷좌석 슬라이드 30mm 등)가 정확하게 나간다.
+        뒷좌석 슬라이드는 왼쪽 30 → (완료) → 오른쪽 30 순차(두 리니어 동시 구동 금지).
+        모든 좌석이 자리잡으면(_check_post_home) 모드 선택 화면으로 넘어간다.
+        """
+        self._cabin_mode = DRIVE_MODE
+        self.cabinModeChanged.emit()
+        self._post_home_to_modes = True
+        self._apply_mode_preset(DRIVE_MODE)
+        print("HOME: 주행 자세 원복(슬라이드 30) 순차 이동 시작 → 완료 시 모드 선택 화면")
+        self._check_post_home()   # 이동이 없으면(이미 30) 즉시 넘어가도록
+
+    def _check_post_home(self):
+        """주행 자세 원복이 끝나면(호밍/보류/이동 전부 종료) 모드 선택 화면으로 전환."""
+        if not self._post_home_to_modes:
+            return
+        if self._home_seq:
+            return
+        if self._any_seat_moving():
+            return
+        self._post_home_to_modes = False
+        print("HOME: 주행 자세 원복 완료 → 모드 선택 화면")
+        self._set_ui_mode("ACTIVE")
+        self._set_screen("MODE_SELECT")
 
     def _apply_mode_preset(self, mode):
         """모드 프리셋 값으로 4개 좌석 target 세팅 후 적용. 미포함 좌석/축은 유지.
@@ -743,17 +998,15 @@ class VehicleState(QObject):
         for seat, axes in preset.items():
             for axis, value in axes.items():
                 self._seat_values[seat][axis]["target"] = int(value)
-        # 2) 앞좌석 + 왼쪽 뒷좌석은 바로 적용.
-        self._pending_rear_right = False
-        for seat in ("driver", "passenger", "rear_left"):
+        # 2) 앞좌석(회전/리클라인 — 동시 구동 제약 없음)은 즉시 적용.
+        for seat in ("driver", "passenger"):
             if seat in preset:
                 self._apply_seat_cmd(seat)
-        # 3) 오른쪽 뒷좌석: 왼쪽 슬라이드가 진행 중이면 그게 끝난 뒤에 움직인다.
-        if "rear_right" in preset:
-            if ("rear_left", "axis2") in self._tweens:
-                self._pending_rear_right = True
-            else:
-                self._apply_seat_cmd("rear_right")
+        # 3) 뒷좌석 슬라이드는 직렬화 큐로만(두 리니어 동시 구동 금지). 한쪽 완료 후 다른 쪽 시작.
+        #    리클라인도 같은 프레임에 실려 나가므로 여기서 함께 처리된다.
+        for seat in ("rear_left", "rear_right"):
+            if seat in preset and self._seat_cmd_approved(seat):
+                self._enqueue_rear_slide(seat)
         self.seatValuesChanged.emit()   # SEAT_DETAIL 슬라이더/dirty 즉시 갱신
         self.seatMovingChanged.emit()
 
@@ -764,11 +1017,20 @@ class VehicleState(QObject):
         ax = self._seat_values[seat][axis]
         if ax["current"] == ax["target"]:
             return                      # 이미 목표 위치 — 할 일 없음
+        # 뒷좌석 슬라이드(open-loop)는 실제 이동 시간(거리×속도)에 맞춰 트윈 시간을 잡는다.
+        #   → rear_left 트윈이 실물 완료 시점에 끝나므로, 그때서야 나가는 rear_right 와 겹치지 않는다
+        #     (두 리니어 동시 구동 금지). 그 외 축은 기존 기본 트윈 시간.
+        if axis == "axis2" and seat in REAR_SEATS:
+            dist = abs(ax["target"] - ax["current"])
+            duration = int(dist * SLIDE_MS_PER_MM + SLIDE_MOVE_MARGIN_MS)
+        else:
+            duration = TWEEN_DURATION_MS
         # 진행 중이면 현재 위치에서 다시 시작(이어서 부드럽게).
         self._tweens[(seat, axis)] = {
             "start": ax["current"],
             "target": ax["target"],
             "elapsed": 0,
+            "duration": max(1, duration),
         }
         if not self._tween_timer.isActive():
             self._tween_timer.start()
@@ -786,7 +1048,7 @@ class VehicleState(QObject):
         done = []
         for key, tw in self._tweens.items():
             tw["elapsed"] += TWEEN_INTERVAL_MS
-            frac = min(1.0, tw["elapsed"] / TWEEN_DURATION_MS)
+            frac = min(1.0, tw["elapsed"] / tw["duration"])
             seat, axis = key
             if frac >= 1.0:
                 self._seat_values[seat][axis]["current"] = tw["target"]
@@ -797,14 +1059,11 @@ class VehicleState(QObject):
                 self._seat_values[seat][axis]["current"] = int(round(val))
         for key in done:
             del self._tweens[key]
-        # 왼쪽 뒷좌석 슬라이드가 끝났으면, 미뤄둔 오른쪽 뒷좌석을 이제 움직인다.
-        if self._pending_rear_right and ("rear_left", "axis2") in done:
-            self._pending_rear_right = False
-            self._apply_seat_cmd("rear_right")   # rear_right 슬라이드 트윈 새로 시작
         if not self._tweens:
             self._tween_timer.stop()
         if done:
             self.seatMovingChanged.emit()   # 도착한 좌석 이동중 표시 해제
             # 주행 모드 좌석 배치 완료(뒷좌석 슬라이드 트윈 종료) 시 홈 자동 이동.
             self._check_drive_settle()
+            self._check_post_home()          # 원점 정렬 후 원복 완료 시 모드 선택 화면으로
         self.seatValuesChanged.emit()

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 import "."
 
@@ -16,13 +17,47 @@ Item {
         anchors.margins: Theme.spaceLg
         spacing: Theme.spaceMd
 
-        Text {
-            text: "좌석 선택"
-            color: Theme.textPrimary
-            font.pixelSize: Theme.fsTitle
-            font.bold: true
-            font.letterSpacing: Theme.tracking
-            Layout.alignment: Qt.AlignHCenter
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Theme.spaceMd
+
+            Text {
+                text: "좌석 선택"
+                color: Theme.textPrimary
+                font.pixelSize: Theme.fsTitle
+                font.bold: true
+                font.letterSpacing: Theme.tracking
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignHCenter
+                Layout.leftMargin: 110   // 오른쪽 버튼 폭만큼 보정해 제목을 시각 중앙에
+            }
+
+            // 뒷좌석 슬라이드 수동 원점 정렬(끼임/estop 후 재정렬용). 호밍 중엔 비활성.
+            Button {
+                id: homeBtn
+                text: "원점 잡기"
+                enabled: !vehicleState.homingActive
+                font.pixelSize: Theme.fsLabel
+                font.bold: true
+                padding: 0
+                Layout.preferredWidth: 110
+                Layout.preferredHeight: 44
+                background: Card {
+                    radius: Theme.radiusSm
+                    fillTop: homeBtn.pressed ? "#14000000" : Theme.surfaceTop
+                    fillBottom: homeBtn.pressed ? "#0a000000" : Theme.surfaceBottom
+                    pressed: homeBtn.pressed
+                    opacity: homeBtn.enabled ? 1.0 : 0.4
+                }
+                contentItem: Text {
+                    text: homeBtn.text
+                    color: Theme.textPrimary
+                    font: homeBtn.font
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+                onClicked: vehicleState.homeRearSlides()
+            }
         }
 
         // ── 차량 평면도(위=앞) ──────────────────────────────────────
