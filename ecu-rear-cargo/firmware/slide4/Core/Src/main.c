@@ -55,12 +55,13 @@
  * 중간에서 부팅됐을 때 254로 실제 시작점까지 보낸 뒤 m<mm>를 쓰면 절대위치가 맞는다. */
 #define SLIDE_REZERO_CMD 255
 #define SLIDE_HOME_CMD   254
+#define SLIDE_HOLD_CMD   253   /* 슬라이드 유지(안 움직임) — 리클라인 서보만 조정할 때 */
 
 /* 안티핀치: 서보 전류센서(INA226) 7비트 주소 + 판정 파라미터.
  * 서보가 끼임으로 스톨되면 전류가 급상승(SG90 구동 ~150mA → 스톨 ~700mA). */
 #define INA226_ADDR_RL    0x40     /* RL 리클라인 서보 전류 → rl_pinch_detected */
 #define INA226_ADDR_RR    0x41     /* RR 리클라인 서보 전류 → rr_pinch_detected */
-#define PINCH_CURRENT_MA  160      /* TODO(calibration): 끼임 판정 전류 임계값(mA) */
+#define PINCH_CURRENT_MA  170      /* TODO(calibration): 끼임 판정 전류 임계값(mA) */
 #define PINCH_DEBOUNCE    3        /* 연속 N회 초과 시 확정(돌입전류 오검출 방지) */
 #define PINCH_PERIOD_MS   20       /* 전류 폴링 주기 */
 #define PINCH_BACKOFF_DEG 15       /* 끼임 시 서보를 이 각만큼 후퇴시켜 압력 해제 */
@@ -145,6 +146,8 @@ int main(void)
   CAN_Config();
   slide_init();
   servo_init();                       /* 리클라인 서보 PWM 시작(두 채널 0°) */
+  servo_set_deg(SERVO_RL, 90);        /* 부팅/리셋 시 좌석 각도 기본 90° (스케줄러 시작 후 servo_service가 램프) */
+  servo_set_deg(SERVO_RR, 90);
   ina_ok_rl = ina226_init(INA226_ADDR_RL);   /* 미장착이면 0 → 해당 축 모니터 skip */
   ina_ok_rr = ina226_init(INA226_ADDR_RR);
   printf("Rear_Zone_ECU boot (INA226 RL=%u RR=%u)\r\n", ina_ok_rl, ina_ok_rr);
@@ -313,7 +316,9 @@ static void can_dispatch(const can_frame_t *f)
       if (model_car_net_rear_left_seat_cmd_unpack(&m, f->data, sizeof(f->data)) == 0) {
         pinch_rl = 0;                                  /* 새 명령 = 끼임 해소 간주, 래치 해제 */
         servo_set_deg(SERVO_RL, m.rl_recline_angle);   /* 리클라인 SG90 서보(좌) */
-        if (m.rl_slide_position == SLIDE_REZERO_CMD)
+        if (m.rl_slide_position == SLIDE_HOLD_CMD)
+          { /* 253 = 슬라이드 유지: 이동 명령 없음(서보만 조정) */ }
+        else if (m.rl_slide_position == SLIDE_REZERO_CMD)
           slide_rezero(SLIDE_RL);                       /* 255 = 현재 위치를 0점으로 재설정 */
         else if (m.rl_slide_position == SLIDE_HOME_CMD)
           slide_seek_home(SLIDE_RL);                    /* 254 = 오른쪽 끝(시작점)으로 호밍 */
@@ -329,7 +334,9 @@ static void can_dispatch(const can_frame_t *f)
         pinch_rr = 0;                                  /* 새 명령 = 끼임 해소 간주, 래치 해제 */
         servo_set_deg(SERVO_RR, m.rr_recline_angle);   /* 리클라인 SG90 서보(우) */
         cmd_cargo_lamp = m.cargo_lamp_status;          /* TODO 램프 GPIO */
-        if (m.rr_slide_position == SLIDE_REZERO_CMD)
+        if (m.rr_slide_position == SLIDE_HOLD_CMD)
+          { /* 253 = 슬라이드 유지: 이동 명령 없음(서보만 조정) */ }
+        else if (m.rr_slide_position == SLIDE_REZERO_CMD)
           slide_rezero(SLIDE_RR);                      /* 255 = 현재 위치를 0점으로 재설정 */
         else if (m.rr_slide_position == SLIDE_HOME_CMD)
           slide_seek_home(SLIDE_RR);                   /* 254 = 오른쪽 끝(시작점)으로 호밍 */

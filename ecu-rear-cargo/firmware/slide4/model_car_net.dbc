@@ -1,0 +1,112 @@
+VERSION ""
+
+
+NS_ : 
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: Monitor_Node Central_Supervisor Front_Zone_ECU Rear_Zone_ECU Drive_ECU
+
+BO_ 96 Heartbeat_Ack: 1 Monitor_Node
+ SG_ Ack_Alive_Counter : 0|8@1+ (1,0) [0|255] ""  Central_Supervisor
+
+BO_ 80 Heartbeat: 1 Central_Supervisor
+ SG_ Alive_Counter : 0|8@1+ (1,0) [0|255] ""  Drive_ECU,Monitor_Node
+
+BO_ 112 GearStatus: 1 Central_Supervisor
+ SG_ Gear : 0|2@1+ (1,0) [0|2] ""  Drive_ECU,Front_Zone_ECU,Rear_Zone_ECU
+
+BO_ 256 Drive_Cmd: 8 Central_Supervisor
+ SG_ Target_Velocity : 0|16@1+ (0.1,0) [0|300] "RPM"  Drive_ECU
+ SG_ Steering_Angle : 16|8@1- (1,0) [-135|135] "Degree"  Drive_ECU
+ SG_ Brake_Depth : 24|8@1+ (1,0) [0|100] "%"  Drive_ECU
+
+BO_ 272 Driver_Seat_Cmd: 4 Central_Supervisor
+ SG_ Drv_Recline_Angle : 0|8@1+ (1,0) [0|180] "Degree"  Front_Zone_ECU
+ SG_ Drv_Rotation_Angle : 8|8@1+ (1,0) [0|180] "Degree"  Front_Zone_ECU
+ SG_ Rolling_Counter    : 16|4@1+ (1,0) [0|15]  ""        Front_Zone_ECU
+ SG_ Checksum           : 24|8@1+ (1,0) [0|255] ""        Front_Zone_ECU
+
+BO_ 273 Passenger_Seat_Cmd: 2 Central_Supervisor
+ SG_ Psgr_Recline_Angle : 0|8@1+ (1,0) [0|180] "Degree"  Front_Zone_ECU
+ SG_ Psgr_Rotation_Angle : 8|8@1+ (1,0) [0|180] "Degree"  Front_Zone_ECU
+
+BO_ 288 Rear_Left_Seat_Cmd: 2 Central_Supervisor
+ SG_ RL_Recline_Angle : 0|8@1+ (1,0) [0|180] "Degree"  Rear_Zone_ECU
+ SG_ RL_Slide_Position : 8|8@1+ (1,0) [0|100] "mm"  Rear_Zone_ECU
+
+BO_ 289 Rear_Right_Seat_Cmd: 3 Central_Supervisor
+ SG_ RR_Recline_Angle : 0|8@1+ (1,0) [0|180] "Degree"  Rear_Zone_ECU
+ SG_ RR_Slide_Position : 8|8@1+ (1,0) [0|100] "mm"  Rear_Zone_ECU
+ SG_ Cargo_Lamp_Status : 16|1@1+ (1,0) [0|1] ""  Rear_Zone_ECU
+
+BO_ 512 Drive_Status: 8 Drive_ECU
+ SG_ Current_Velocity : 0|16@1+ (0.1,0) [0|300] "RPM"  Central_Supervisor
+ SG_ Drive_Motor_Current : 16|16@1+ (1,0) [0|5000] "mA"  Central_Supervisor
+ SG_ Current_Gear_Status : 32|2@1+ (1,0) [0|2] ""  Central_Supervisor
+
+BO_ 528 Driver_Seat_Status: 2 Front_Zone_ECU
+ SG_ Curr_Drv_Recline : 0|8@1+ (1,0) [0|180] "Degree"  Central_Supervisor
+ SG_ Drv_Pinch_Detected : 8|1@1+ (1,0) [0|1] ""  Central_Supervisor
+
+BO_ 529 Passenger_Seat_Status: 2 Front_Zone_ECU
+ SG_ Curr_Psgr_Recline : 0|8@1+ (1,0) [0|180] "Degree"  Central_Supervisor
+ SG_ Psgr_Pinch_Detected : 8|1@1+ (1,0) [0|1] ""  Central_Supervisor
+
+BO_ 544 Rear_Left_Seat_Status: 2 Rear_Zone_ECU
+ SG_ Curr_RL_Recline : 0|8@1+ (1,0) [0|180] "Degree"  Central_Supervisor
+ SG_ RL_Pinch_Detected : 8|1@1+ (1,0) [0|1] ""  Central_Supervisor
+
+BO_ 545 Rear_Right_Seat_Status: 2 Rear_Zone_ECU
+ SG_ Curr_RR_Recline : 0|8@1+ (1,0) [0|180] "Degree"  Central_Supervisor
+ SG_ RR_Pinch_Detected : 8|1@1+ (1,0) [0|1] ""  Central_Supervisor
+
+BO_ 16 SafeAbort: 3 Central_Supervisor
+ SG_ Stop_Flag      : 0|1@1+  (1,0)   [0|1]    ""  Front_Zone_ECU,Rear_Zone_ECU,Drive_ECU,Central_Supervisor
+ SG_ Source_Id      : 8|8@1+  (1,0)   [0|255]  ""  Front_Zone_ECU,Rear_Zone_ECU,Drive_ECU,Central_Supervisor
+ SG_ Reason_Code    : 16|8@1+ (1,0)   [0|255]  ""  Front_Zone_ECU,Rear_Zone_ECU,Drive_ECU,Central_Supervisor
+
+BO_TX_BU_ 16 : Monitor_Node,Central_Supervisor;
+
+
+CM_ "For Intel Edge AI SW Academy 9th Final Project";
+CM_ BU_ Monitor_Node "Monitor_Node: Receives Signals from Racing Wheel & Safety Guard";
+CM_ BU_ Central_Supervisor "Central Supervisor (D3-G)";
+CM_ BU_ Front_Zone_ECU "Front Zone Actuator Controller (Pico/STM32)";
+CM_ BU_ Rear_Zone_ECU "Rear/Cargo Zone Actuator Controller (Pico/STM32)";
+CM_ BU_ Drive_ECU "Powertrain and Steering Controller";
+CM_ BO_ 256 "Powertrain command sent periodically from Supervisor";
+CM_ BO_ 272 "Driver power seat command from Supervisor";
+CM_ BO_ 273 "Passenger power seat command from Supervisor";
+CM_ BO_ 288 "Rear Left power seat command from Supervisor";
+CM_ BO_ 289 "Rear Right power seat command from Supervisor";
+CM_ BO_ 16 "Critical emergency stop signal triggered by HMI";
+
