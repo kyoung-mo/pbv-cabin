@@ -49,8 +49,14 @@ void slide_seek_home(slide_ch_t ch);
 /* 현재 위치(mm). 상태 보고용 피드백. */
 uint8_t slide_get_pos_mm(slide_ch_t ch);
 
-/* 이동 중이면 1. FreeRTOS 태스크가 이동 중 정밀 스텝(tight-loop) 판단에 사용. */
+/* 이동 중이면 1(어느 축이든). FreeRTOS 태스크가 이동 중 정밀 스텝(tight-loop) 판단에 사용. */
 uint8_t slide_is_moving(void);
+
+/* 특정 축이 지금 실제로 구동(스텝) 중이면 1(드라이버 ON). 인터록 대기 축은 0. */
+uint8_t slide_ch_is_moving(slide_ch_t ch);
+
+/* 특정 축이 목표 미도달(구동 중 + 순서 대기 포함)이면 1. estop 시 0. */
+uint8_t slide_ch_pending(slide_ch_t ch);
 
 #ifdef __cplusplus
 }

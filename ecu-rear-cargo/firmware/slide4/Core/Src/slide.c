@@ -198,13 +198,36 @@ void slide_set_target_mm(slide_ch_t ch, uint8_t mm)
   targetSteps[ch] = (int32_t)(mm * STEPS_PER_MM);
 }
 
+/* 인터록: 두 슬라이드 축이 동시에 구동되지 않도록 한 번에 한 축만 이동시킨다.
+ * 동시 구동의 큰 전류·회생 역기전력 스파이크로 드라이버가 손상되는 것을 방지(RL 우선). */
+static slide_ch_t s_active = SLIDE_COUNT;   /* 현재 이동을 소유한 축(SLIDE_COUNT=없음) */
+
+static uint8_t ch_pending(slide_ch_t ch)    /* 아직 이동/호밍이 남았으면 1 */
+{
+  return (homeRemaining[ch] > 0 || posSteps[ch] != targetSteps[ch]);
+}
+
 void slide_service(void)
 {
   if (estop) {                                       /* E-stop: 두 축 정지 유지 */
     for (uint8_t ch = 0; ch < SLIDE_COUNT; ch++) driver_disable((slide_ch_t)ch);
+    s_active = SLIDE_COUNT;
     return;
   }
-  for (uint8_t ch = 0; ch < SLIDE_COUNT; ch++) service_ch((slide_ch_t)ch);
+
+  /* 활성 축이 목표에 도달했으면 인터록 해제 */
+  if (s_active < SLIDE_COUNT && !ch_pending(s_active))
+    s_active = SLIDE_COUNT;
+
+  /* 활성 축이 없으면 이동 대기 중인 축을 하나만 잡는다(RL 우선) */
+  if (s_active >= SLIDE_COUNT) {
+    for (uint8_t ch = 0; ch < SLIDE_COUNT; ch++) {
+      if (ch_pending((slide_ch_t)ch)) { s_active = (slide_ch_t)ch; break; }
+    }
+  }
+
+  /* 인터록: 활성 축만 스텝. 나머지 축은 대기(드라이버 꺼짐 유지) → 동시 구동 차단. */
+  if (s_active < SLIDE_COUNT) service_ch(s_active);
 }
 
 /* 부팅 1회 호출. SLIDE_HOMING=1이면 하드스톱까지 밀어 0점 잡기(센서 없음 → 오버드라이브).
@@ -274,4 +297,20 @@ uint8_t slide_is_moving(void)
   for (uint8_t ch = 0; ch < SLIDE_COUNT; ch++)
     if (homeRemaining[ch] > 0 || posSteps[ch] != targetSteps[ch]) return 1;
   return 0;
+}
+
+/* 특정 축이 지금 실제로 구동(스텝) 중인가. 1=드라이버 ON(이동 중), 0=정지/순서대기.
+ * 인터록으로 한 번에 한 축만 ON이므로, 명령은 받았지만 순서 대기 중인 축은 0을 반환한다.
+ * (명령 접수됐으나 아직 시작 전인지까지 보려면 slide_ch_pending 사용) */
+uint8_t slide_ch_is_moving(slide_ch_t ch)
+{
+  if (ch >= SLIDE_COUNT) return 0;
+  return enabled[ch];
+}
+
+/* 특정 축이 목표 미도달(이동 중 + 순서 대기 포함)이면 1. estop 시 0. */
+uint8_t slide_ch_pending(slide_ch_t ch)
+{
+  if (ch >= SLIDE_COUNT || estop) return 0;
+  return (homeRemaining[ch] > 0 || posSteps[ch] != targetSteps[ch]);
 }
