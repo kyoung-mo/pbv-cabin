@@ -35,6 +35,7 @@ BS_:
 
 BU_: Monitor_Node Central_Supervisor Front_Zone_ECU Rear_Zone_ECU Drive_ECU
 
+
 BO_ 96 Heartbeat_Ack: 1 Monitor_Node
  SG_ Ack_Alive_Counter : 0|8@1+ (1,0) [0|255] ""  Central_Supervisor
 
@@ -52,8 +53,8 @@ BO_ 256 Drive_Cmd: 8 Central_Supervisor
 BO_ 272 Driver_Seat_Cmd: 4 Central_Supervisor
  SG_ Drv_Recline_Angle : 0|8@1+ (1,0) [0|180] "Degree"  Front_Zone_ECU
  SG_ Drv_Rotation_Angle : 8|8@1+ (1,0) [0|180] "Degree"  Front_Zone_ECU
- SG_ Rolling_Counter    : 16|4@1+ (1,0) [0|15]  ""        Front_Zone_ECU
- SG_ Checksum           : 24|8@1+ (1,0) [0|255] ""        Front_Zone_ECU
+ SG_ Rolling_Counter : 16|4@1+ (1,0) [0|15] ""  Front_Zone_ECU
+ SG_ Checksum : 24|8@1+ (1,0) [0|255] ""  Front_Zone_ECU
 
 BO_ 273 Passenger_Seat_Cmd: 2 Central_Supervisor
  SG_ Psgr_Recline_Angle : 0|8@1+ (1,0) [0|180] "Degree"  Front_Zone_ECU
@@ -73,26 +74,30 @@ BO_ 512 Drive_Status: 8 Drive_ECU
  SG_ Drive_Motor_Current : 16|16@1+ (1,0) [0|5000] "mA"  Central_Supervisor
  SG_ Current_Gear_Status : 32|2@1+ (1,0) [0|2] ""  Central_Supervisor
 
-BO_ 528 Driver_Seat_Status: 2 Front_Zone_ECU
+BO_ 528 Driver_Seat_Status: 3 Front_Zone_ECU
  SG_ Curr_Drv_Recline : 0|8@1+ (1,0) [0|180] "Degree"  Central_Supervisor
- SG_ Drv_Pinch_Detected : 8|1@1+ (1,0) [0|1] ""  Central_Supervisor
+ SG_ Drv_Pinch_Detected : 16|1@1+ (1,0) [0|1] ""  Central_Supervisor
+ SG_ Curr_Drv_Rotate : 8|8@1+ (1,0) [0|180] "Degree"  Central_Supervisor
 
-BO_ 529 Passenger_Seat_Status: 2 Front_Zone_ECU
+BO_ 529 Passenger_Seat_Status: 3 Front_Zone_ECU
  SG_ Curr_Psgr_Recline : 0|8@1+ (1,0) [0|180] "Degree"  Central_Supervisor
- SG_ Psgr_Pinch_Detected : 8|1@1+ (1,0) [0|1] ""  Central_Supervisor
+ SG_ Psgr_Pinch_Detected : 16|1@1+ (1,0) [0|1] ""  Central_Supervisor
+ SG_ Curr_Psgr_Rotate : 8|8@1+ (1,0) [0|180] "Degree"  Central_Supervisor
 
-BO_ 544 Rear_Left_Seat_Status: 2 Rear_Zone_ECU
+BO_ 544 Rear_Left_Seat_Status: 3 Rear_Zone_ECU
+ SG_ Curr_RL_Slide : 16|8@1+ (1,0) [0|100] "mm" Central_Supervisor
  SG_ Curr_RL_Recline : 0|8@1+ (1,0) [0|180] "Degree"  Central_Supervisor
  SG_ RL_Pinch_Detected : 8|1@1+ (1,0) [0|1] ""  Central_Supervisor
 
-BO_ 545 Rear_Right_Seat_Status: 2 Rear_Zone_ECU
+BO_ 545 Rear_Right_Seat_Status: 3 Rear_Zone_ECU
+ SG_ Curr_RR_Slide : 16|8@1+ (1,0) [0|100] "mm" Central_Supervisor
  SG_ Curr_RR_Recline : 0|8@1+ (1,0) [0|180] "Degree"  Central_Supervisor
  SG_ RR_Pinch_Detected : 8|1@1+ (1,0) [0|1] ""  Central_Supervisor
 
 BO_ 16 SafeAbort: 3 Central_Supervisor
- SG_ Stop_Flag      : 0|1@1+  (1,0)   [0|1]    ""  Front_Zone_ECU,Rear_Zone_ECU,Drive_ECU,Central_Supervisor
- SG_ Source_Id      : 8|8@1+  (1,0)   [0|255]  ""  Front_Zone_ECU,Rear_Zone_ECU,Drive_ECU,Central_Supervisor
- SG_ Reason_Code    : 16|8@1+ (1,0)   [0|255]  ""  Front_Zone_ECU,Rear_Zone_ECU,Drive_ECU,Central_Supervisor
+ SG_ Stop_Flag : 0|1@1+ (1,0) [0|1] ""  Front_Zone_ECU,Rear_Zone_ECU,Drive_ECU,Central_Supervisor
+ SG_ Source_Id : 8|8@1+ (1,0) [0|255] ""  Front_Zone_ECU,Rear_Zone_ECU,Drive_ECU,Central_Supervisor
+ SG_ Reason_Code : 16|8@1+ (1,0) [0|255] ""  Front_Zone_ECU,Rear_Zone_ECU,Drive_ECU,Central_Supervisor
 
 BO_TX_BU_ 16 : Monitor_Node,Central_Supervisor;
 

@@ -270,6 +270,7 @@ static void send_status(void)
   struct model_car_net_rear_left_seat_status_t rl = {
     .curr_rl_recline   = servo_get_deg(SERVO_RL),  /* RL 리클라인 서보 지령각(°) */
     .rl_pinch_detected = pinch_rl,                 /* INA226 안티핀치 결과(래치) */
+    .curr_rl_slide     = slide_report_pos_mm(SLIDE_RL), /* 슬라이드 위치 0~100mm, 0xFF=원점 미확정 */
   };
   tx.StdId = MODEL_CAR_NET_REAR_LEFT_SEAT_STATUS_FRAME_ID;
   tx.DLC   = (uint32_t)model_car_net_rear_left_seat_status_pack(d, &rl, sizeof(d));
@@ -279,6 +280,7 @@ static void send_status(void)
   struct model_car_net_rear_right_seat_status_t rr = {
     .curr_rr_recline   = servo_get_deg(SERVO_RR),  /* RR 리클라인 서보 지령각(°) */
     .rr_pinch_detected = pinch_rr,
+    .curr_rr_slide     = slide_report_pos_mm(SLIDE_RR), /* 슬라이드 위치 0~100mm, 0xFF=원점 미확정 */
   };
   tx.StdId = MODEL_CAR_NET_REAR_RIGHT_SEAT_STATUS_FRAME_ID;
   tx.DLC   = (uint32_t)model_car_net_rear_right_seat_status_pack(d, &rr, sizeof(d));
@@ -304,10 +306,10 @@ static void can_dispatch(const can_frame_t *f)
 {
   switch (f->id) {
 
-    case MODEL_CAR_NET_HMI_EMERGENCY_FRAME_ID: {       /* 0x010: 최고 우선 처리 */
-      struct model_car_net_hmi_emergency_t m;
-      if (model_car_net_hmi_emergency_unpack(&m, f->data, sizeof(f->data)) == 0)
-        slide_estop(m.emergency_stop_flag);            /* 1=래치 정지, 0=해제 */
+    case MODEL_CAR_NET_SAFE_ABORT_FRAME_ID: {          /* 0x010 SafeAbort: 최고 우선 처리 */
+      struct model_car_net_safe_abort_t m;
+      if (model_car_net_safe_abort_unpack(&m, f->data, sizeof(f->data)) == 0)
+        slide_estop(m.stop_flag);                      /* 1=래치 정지, 0=해제 */
       break;
     }
 

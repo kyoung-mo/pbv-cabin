@@ -76,6 +76,7 @@ static uint8_t  enabled[SLIDE_COUNT]       = {0};  /* 드라이버 EN 상태 캐
 static int32_t  homeRemaining[SLIDE_COUNT] = {0};  /* >0 이면 호밍 중(오른쪽 끝까지 남은 스텝수) */
 static uint32_t curStepUs[SLIDE_COUNT]     = {0};  /* 현재 스텝 간격(가속 중 STEP_START→STEP_MIN) */
 static uint8_t  estop                      = 0;    /* 1이면 두 축 모두 정지(래치) */
+static uint8_t  homed[SLIDE_COUNT]         = {0};  /* 1=원점 확정(호밍완료/재영점)→위치보고 유효. 0=미확정(0xFF 보고) */
 
 /* --------------------------------------------------------------------------
  *  DWT 마이크로초 타이머 (Cortex-M4 사이클 카운터)
@@ -151,6 +152,7 @@ static void service_ch(slide_ch_t ch)
     if (--homeRemaining[ch] == 0) {                   /* 하드스톱 도달 → 그 위치를 0으로 */
       posSteps[ch]    = 0;
       targetSteps[ch] = 0;
+      homed[ch]       = 1;                           /* 254 호밍 완료 = 원점 확정 → 위치보고 시작 */
       driver_disable(ch);                            /* 끝에서 정지 — 발열 방지 */
     }
     return;
@@ -184,6 +186,7 @@ void slide_init(void)
     posSteps[ch]      = 0;
     targetSteps[ch]   = 0;
     homeRemaining[ch] = 0;
+    homed[ch]         = 0;          /* 부팅 원점 미확정(SLIDE_HOMING=0) → 호밍/재영점 전까지 0xFF 보고 */
     curStepUs[ch]     = STEP_START_US;
     enabled[ch]       = 1;          /* MX_GPIO_Init이 EN=LOW(enable)로 둠 → 캐시 동기화 후 끈다 */
     HAL_GPIO_WritePin(IO[ch].step_port, IO[ch].step_pin, GPIO_PIN_RESET);
@@ -269,6 +272,7 @@ void slide_rezero(slide_ch_t ch)
   homeRemaining[ch] = 0;
   posSteps[ch]      = 0;
   targetSteps[ch]   = 0;
+  homed[ch]         = 1;             /* 255 재영점 = 현위치를 원점으로 확정 → 위치보고 유효 */
 }
 
 /* 시작점(오른쪽 끝) 호밍: -mm(오른쪽) 방향으로 전체행정의 105%를 밀어 하드스톱에 붙인 뒤
@@ -277,6 +281,7 @@ void slide_rezero(slide_ch_t ch)
 void slide_seek_home(slide_ch_t ch)
 {
   if (ch >= SLIDE_COUNT) return;
+  homed[ch]         = 0;             /* 호밍 시작 = 원점 무효화(완료 시 service_ch가 다시 1) */
   homeRemaining[ch] = (int32_t)(SLIDE_MAX_MM * STEPS_PER_MM * SLIDE_HOMING_OVERDRIVE);
 }
 
@@ -287,6 +292,14 @@ uint8_t slide_get_pos_mm(slide_ch_t ch)
   if (mm < 0) mm = 0;
   if (mm > SLIDE_MAX_MM) mm = SLIDE_MAX_MM;
   return (uint8_t)mm;
+}
+
+/* CAN 상태 보고용 위치. 원점 확정(homed) 전엔 0xFF(미확정) → 중앙이 "호밍 필요"로 인식하게 한다.
+ * 호밍/재영점 전엔 절대위치를 신뢰할 수 없고(개루프), 클램프로 0이 되어 "위치0"으로 오해되는 걸 막는다. */
+uint8_t slide_report_pos_mm(slide_ch_t ch)
+{
+  if (ch >= SLIDE_COUNT) return 0xFFu;
+  return homed[ch] ? slide_get_pos_mm(ch) : 0xFFu;
 }
 
 /* 이동 중이면 1(estop 시 0). 어느 축이든 목표 미도달 또는 호밍 중이면 이동으로 본다.

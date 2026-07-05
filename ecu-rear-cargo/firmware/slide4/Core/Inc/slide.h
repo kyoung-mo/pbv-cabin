@@ -49,6 +49,9 @@ void slide_seek_home(slide_ch_t ch);
 /* 현재 위치(mm). 상태 보고용 피드백. */
 uint8_t slide_get_pos_mm(slide_ch_t ch);
 
+/* CAN 상태 보고용 위치(mm). 원점 미확정(호밍/재영점 전)이면 0xFF(=미확정 센티넬), 확정 후 0~100. */
+uint8_t slide_report_pos_mm(slide_ch_t ch);
+
 /* 이동 중이면 1(어느 축이든). FreeRTOS 태스크가 이동 중 정밀 스텝(tight-loop) 판단에 사용. */
 uint8_t slide_is_moving(void);
 
