@@ -40,16 +40,17 @@ SEAT_CMD_DEF = {
     "rear_right": ("Rear_Right_Seat_Cmd", "RR_Recline_Angle",   "RR_Slide_Position"),
 }
 
-# ── 좌석 Status 메시지 → (좌석키, recline 시그널, rotate 시그널|None, pinch 시그널) ──
-#   · 앞좌석(0x210/0x211)은 DLC3 — Curr_*_Rotate(회전 현재값)까지 피드백한다(closed-loop).
-#   · 뒷좌석(0x220/0x221)은 DLC2 — 슬라이드 현재값 피드백이 없다(rotate=None, open-loop).
-#   파싱은 전부 cantools decode 로 통일(수동 비트 추출 없음). 핀치 비트 위치(byte1→byte2)
-#   변경도 DBC 기준으로 cantools 가 알아서 처리한다.
+# ── 좌석 Status 메시지 → (좌석키, recline 시그널, rotate 시그널|None, pinch 시그널, slide 시그널|None) ──
+#   · 앞좌석(0x210/0x211)은 DLC3 — Curr_*_Rotate(회전 현재값)까지 피드백한다(closed-loop). slide 없음.
+#   · 뒷좌석(0x220/0x221)도 DLC3 — Curr_*_Slide(슬라이드 위치)를 피드백한다(rotate=None).
+#       리어 ECU slide.c: homed 전에는 255(0xFF)=원점 미확정, homed 후 0~100mm 실측을 보고.
+#   파싱은 전부 cantools decode 로 통일(수동 비트 추출 없음). range 가 [0|100]이어도 decode 는
+#   min/max 클램프를 안 하므로 255 센티넬이 그대로 살아 들어온다(vehicle_state 에서 판별).
 SEAT_STATUS_DEF = {
-    "Driver_Seat_Status":     ("driver",     "Curr_Drv_Recline",  "Curr_Drv_Rotate",  "Drv_Pinch_Detected"),
-    "Passenger_Seat_Status":  ("passenger",  "Curr_Psgr_Recline", "Curr_Psgr_Rotate", "Psgr_Pinch_Detected"),
-    "Rear_Left_Seat_Status":  ("rear_left",  "Curr_RL_Recline",   None,               "RL_Pinch_Detected"),
-    "Rear_Right_Seat_Status": ("rear_right", "Curr_RR_Recline",   None,               "RR_Pinch_Detected"),
+    "Driver_Seat_Status":     ("driver",     "Curr_Drv_Recline",  "Curr_Drv_Rotate",  "Drv_Pinch_Detected",  None),
+    "Passenger_Seat_Status":  ("passenger",  "Curr_Psgr_Recline", "Curr_Psgr_Rotate", "Psgr_Pinch_Detected", None),
+    "Rear_Left_Seat_Status":  ("rear_left",  "Curr_RL_Recline",   None,               "RL_Pinch_Detected",   "Curr_RL_Slide"),
+    "Rear_Right_Seat_Status": ("rear_right", "Curr_RR_Recline",   None,               "RR_Pinch_Detected",   "Curr_RR_Slide"),
 }
 
 
@@ -80,8 +81,9 @@ class CanHub(QObject):
     """can0 송수신 허브. 생성 시 DBC 로드 + 버스 오픈(실패 시 예외)."""
 
     # RX 스레드 → GUI 스레드 (QueuedConnection 으로 연결할 것)
-    #   rotate = 앞좌석 Curr_*_Rotate(회전 현재값). 뒷좌석은 피드백 없어 -1.
-    seatStatusReceived = Signal(str, int, int, bool)   # (seat, curr_recline, curr_rotate|-1, pinch)
+    #   rotate = 앞좌석 Curr_*_Rotate(회전 현재값). 뒷좌석은 회전 피드백 없어 -1.
+    #   slide  = 뒷좌석 Curr_*_Slide(슬라이드 위치 0~100mm, 255=원점 미확정). 앞좌석은 -1.
+    seatStatusReceived = Signal(str, int, int, bool, int)  # (seat, recline, rotate|-1, pinch, slide|-1)
     driveStatusReceived = Signal(float, int, int)      # (velocity_rpm, motor_mA, gear)
     busError = Signal(str)
 
@@ -230,14 +232,15 @@ class CanHub(QObject):
 
             info = self._status_by_id.get(msg.arbitration_id)
             if info:
-                seat, recline_sig, rotate_sig, pinch_sig = info
+                seat, recline_sig, rotate_sig, pinch_sig, slide_sig = info
                 try:
                     d = self._db.decode_message(msg.arbitration_id, msg.data)
                 except Exception:
                     continue
                 rotate = int(round(d[rotate_sig])) if rotate_sig else -1
+                slide = int(round(d[slide_sig])) if slide_sig else -1
                 self.seatStatusReceived.emit(
-                    seat, int(round(d[recline_sig])), rotate, bool(d[pinch_sig]))
+                    seat, int(round(d[recline_sig])), rotate, bool(d[pinch_sig]), slide)
             elif msg.arbitration_id == self._drive_status_id:
                 try:
                     d = self._db.decode_message(msg.arbitration_id, msg.data)

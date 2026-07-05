@@ -4,7 +4,8 @@
   · 입력(슬라이더/모드/적용/기어) → 안전 인터록 통과 시에만 CanHub 로 encode→send.
   · 디지털 트윈의 "현재 recline 포즈"는 로컬 트윈이 아니라 **수신한 Seat_Status**로만
     갱신한다(onSeatStatus). 더미 ECU(또는 실물 ECU)가 보내는 Curr_*_Recline 을 따라간다.
-      └ 단, 회전/슬라이드(axis2)는 DBC 에 Status 피드백이 없어 로컬 트윈으로 시각화한다.
+      └ 회전(앞 Curr_*_Rotate)은 실시간 closed-loop. 슬라이드(뒤 Curr_*_Slide)는 이동 중
+        상태 기아로 '완료 후 1회' 실측이 와서, open-loop 트윈을 그 시점에 실측으로 스냅한다.
   · QML은 이 객체의 Property에 binding으로만 그리며, 입력은 @Slot setter만 호출한다.
   · CanHub 가 None(셀프테스트/CAN 미연결)이면 송신부는 콘솔 출력으로 폴백한다.
 """
@@ -52,6 +53,11 @@ IDLE_TIMEOUT_MS = 10000
 #     슬라이드는 (호밍만 돼 있으면) 안 움직인다.
 SLIDE_HOME_CMD = 254
 SLIDE_REZERO_CMD = 255
+# 뒷좌석 슬라이드 '상태' 센티넬(명령이 아니라 수신 Curr_*_Slide 값).
+#   리어 ECU(slide.c:302 slide_report_pos_mm)는 원점 확정(homed) 전에는 실제 위치 대신
+#   255(0xFF)를 보고한다 → 255 = 원점 미확정(호밍 필요), 0~100 = 실측 위치(mm).
+#   DBC range 가 [0|100]이어도 cantools decode 는 클램프를 안 해 255 가 그대로 들어온다.
+SLIDE_POS_UNKNOWN = 255
 REAR_SEATS = ("rear_left", "rear_right")
 # 원점 정렬은 사용자 확인 스텝으로 진행한다(자동 완료판정 X):
 #   왼쪽 정렬(자동 시작) → [확인] → 오른쪽 정렬 → [확인] → 주행 자세 원복.
@@ -595,13 +601,15 @@ class VehicleState(QObject):
     # =====================================================================
     # CAN 수신 → 디지털 트윈 갱신 (RX 스레드에서 QueuedConnection 으로 호출됨 = GUI 스레드 안전)
     # =====================================================================
-    @Slot(str, int, int, bool)
-    def onSeatStatus(self, seat, recline, rotate, pinch):
+    @Slot(str, int, int, bool, int)
+    def onSeatStatus(self, seat, recline, rotate, pinch, slide=-1):
         """*_Seat_Status 수신 → 디지털 트윈 현재포즈 + 끼임 경고를 GUI 에 반영.
 
         · recline           : 전 좌석 closed-loop — current ← Curr_*_Recline.
         · rotate(앞좌석만)  : closed-loop — axis2.current ← Curr_*_Rotate. (rotate<0=피드백 없음)
-        · 뒷좌석 슬라이드    : 피드백 없음 → 여기서 건드리지 않음(open-loop 트윈 유지).
+        · 뒷좌석 슬라이드    : Curr_*_Slide 피드백(0~100mm / 255=원점 미확정). 이동 완료 후
+          재개되는 상태 프레임에서 실측값으로 axis2 트윈을 스냅(_apply_rear_slide_feedback).
+          (slide<0 = 앞좌석/피드백 없음.)
 
         ※ CanHub.seatStatusReceived 에 QueuedConnection 으로 연결 → 반드시 GUI 스레드 실행.
            RX 스레드가 직접 Property 를 건드리지 않는다(스레드 안전).
@@ -624,6 +632,10 @@ class VehicleState(QObject):
             if a["current"] != rotate:
                 a["current"] = rotate
                 changed = True
+        # 뒷좌석 슬라이드 위치 피드백(closed-loop 스냅) — 255=미확정 / 0~100=실측 mm.
+        if seat in REAR_SEATS and slide >= 0:
+            if self._apply_rear_slide_feedback(seat, slide):
+                changed = True
         if changed:
             self.seatValuesChanged.emit()   # 3D 트윈(seatPose)·dirty 갱신
             self.seatMovingChanged.emit()   # commanded 도달 여부(이동중) 갱신
@@ -635,6 +647,40 @@ class VehicleState(QObject):
         # 주행 모드 좌석 배치 완료 시 홈 자동 이동(closed-loop 축이 commanded 에 도달한 시점).
         self._check_drive_settle()
         self._check_post_home()   # 원점 정렬 후 원복 완료 시 모드 선택 화면으로
+
+    def _apply_rear_slide_feedback(self, seat, slide):
+        """뒷좌석 Curr_*_Slide 수신 처리. 반환: 트윈(current)이 실제로 바뀌었으면 True.
+
+        펌웨어는 이동 중엔 상태를 못 보내고(MotionTask 기아) 완료 후 재개하며 그 프레임에
+        '도착 위치'를 싣는다 — 그래서 여기 오는 slide 는 사실상 '정지한 실측 위치'다.
+          · 255(SLIDE_POS_UNKNOWN) = 원점 미확정 → homed 해제, 위치는 무시(스냅 안 함).
+          · 0~100 = 실측 mm → homed 확정 + axis2.current 를 실측으로 스냅(open-loop 추정 보정).
+
+        스냅은 current 만 한다(옵션 A): 사용자가 슬라이더로 둔 target 은 유지한다. 과부하로
+        목표에 못 미쳐 멈추면 target≠current 라 'dirty(적용 필요)'가 떠 '덜 갔음'을 그대로 알린다.
+        """
+        # 원점 정렬 시퀀스 중엔 호밍 로직(_mark_home_done)이 트윈을 직접 관리 → 스냅은 비켜준다.
+        if self._home_seq:
+            return False
+        if slide == SLIDE_POS_UNKNOWN:
+            # 원점 미확정 통보(부팅~호밍 전). 위치값 아님 → 트윈 건드리지 않음.
+            if self._rear_homed.get(seat):
+                self._rear_homed[seat] = False
+            return False
+        # 0~100 실측 위치 = 원점 확정된 상태.
+        self._rear_homed[seat] = True
+        # 구동 시작 직후 가드 내 프레임은 '이동 시작 전 잔여 위치'일 수 있어 스냅 보류
+        #   (완료판정과 동일 가드 — 실제 도착 프레임은 가드 이후에 재개된다).
+        if self._slide_busy == seat and \
+                time.monotonic() * 1000.0 - self._slide_started < SLIDE_DONE_GUARD_MS:
+            return False
+        ax = self._seat_values[seat]["axis2"]
+        if ax["current"] == slide:
+            return False   # 유휴 중 동일 위치 반복 수신 — 무변화
+        # 진행 중이던 open-loop 트윈이 있으면 취소(실측이 진실).
+        self._tweens.pop((seat, "axis2"), None)
+        ax["current"] = int(slide)
+        return True
 
     # --- 레이싱휠 → 화면 즉각 반영 (인터록과 무관, 항상) ---
     @Slot(int, int, int)
@@ -802,7 +848,9 @@ class VehicleState(QObject):
             print(f"[NO-CAN] SEAT_CMD {SEAT_LABELS[seat]} 리클라인={recline} {name}={shown}")
 
     def _axis2_closed_loop(self, seat):
-        """앞좌석 회전 = Curr_*_Rotate 피드백 있음(closed-loop). 뒷좌석 슬라이드 = 없음(open-loop)."""
+        """앞좌석 회전 = Curr_*_Rotate 실시간 closed-loop. 뒷좌석 슬라이드 = 이동 중엔 open-loop
+        트윈이고, Curr_*_Slide 는 '완료 후 1회'만 와 별도 경로(_apply_rear_slide_feedback)로
+        스냅한다 → 실시간 추종이 아니므로 여기선 앞좌석만 True."""
         return seat in FRONT_SEATS
 
     def _mark_commit(self, seat, axis):
