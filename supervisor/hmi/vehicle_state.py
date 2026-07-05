@@ -674,6 +674,40 @@ class VehicleState(QObject):
 
     anyPinch = Property(bool, _get_any_pinch, notify=pinchChanged)
 
+    def _get_pinch_prompt(self):
+        """끼임(과전류) 오버레이 안내문 — 현재 끼인 좌석 이름 + 해제 방법."""
+        seats = [SEAT_LABELS[s] for s, on in self._pinch.items() if on]
+        if not seats:
+            return ""
+        return (f"{', '.join(seats)} 좌석에서 과도한 힘(과전류)이 감지됐습니다.\n"
+                "장애물을 치운 뒤 [확인]을 누르면 해제됩니다.")
+
+    pinchPrompt = Property(str, _get_pinch_prompt, notify=pinchChanged)
+
+    @Slot(str)
+    def resolvePinch(self, seat=""):
+        """끼임(과전류) 확인/해제: 끼인 좌석에 현재 target 을 재송신해 펌웨어 끼임 래치를 푼다.
+
+        slide4(main.c)는 새 *_Seat_Cmd 를 받으면 '끼임 해소'로 보고 pinch 래치를 해제한다.
+        (과전류 = 끼임 — 별개 상태가 아님.) 장애물이 남아 있으면 다음 상태프레임에서 다시
+        끼임으로 잡히므로(정상 재래치), 확인은 사실상 '재시도 + 경고 해제'다.
+        seat="" 이면 현재 끼인 좌석 전체를 해제한다(오버레이 확인 버튼 경로).
+        슬라이드 target 은 그대로라 재송신해도 리니어는 안 움직인다(래치만 풀림).
+        """
+        targets = [seat] if seat else [s for s, on in self._pinch.items() if on]
+        changed = False
+        for s in targets:
+            if s not in self._pinch:
+                continue
+            if self._can and s in self._seat_values:
+                self._send_seat(s)          # 새 명령 = 펌웨어 끼임 래치 해제
+            if self._pinch.get(s):
+                self._pinch[s] = False
+                changed = True
+                print(f"PINCH: {SEAT_LABELS[s]} 끼임 확인/해제 명령 전송")
+        if changed:
+            self.pinchChanged.emit()
+
     # --- 과전류 긴급정지(E-stop) Property/훅: QML 은 seatEstop[<seat>] 로 바인딩 ---
     #   과전류 → 해당 좌석 긴급정지 시 3D 좌석이 빨강~핑크로 깜빡인다(Seat3D.estop).
     #   CAN 수신 방식이 정해지면 그 디코드 지점에서 setSeatEstop(seat, on) 을 호출하면 된다.

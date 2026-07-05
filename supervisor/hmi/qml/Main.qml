@@ -133,4 +133,70 @@ ApplicationWindow {
             }
         }
     }
+
+    // 끼임(과전류) 감지 — 오른쪽 패널 위 확인 오버레이.
+    //   과전류 = 끼임(별개 아님). anyPinch 동안 오른쪽 UI를 덮어 경고 + [확인]을 띄우고,
+    //   확인 시 resolvePinch()가 끼인 좌석에 재명령을 보내 펌웨어 끼임 래치를 해제한다.
+    //   오른쪽 패널 영역(rightPanel)만 덮는다 — 왼쪽 차량 3D는 계속 보이게.
+    Rectangle {
+        id: pinchOverlay
+        visible: vehicleState.anyPinch
+        x: rightPanel.x
+        width: rightPanel.width
+        y: 0
+        height: parent.height - Theme.navHeight
+        z: 900
+        color: "#e60b0f14"
+        // 뒤 패널 입력 완전 차단
+        MouseArea { anchors.fill: parent; hoverEnabled: true; onClicked: {} }
+
+        Column {
+            anchors.centerIn: parent
+            width: Math.min(parent.width * 0.82, 520)
+            spacing: 20
+
+            Text {   // 깜빡이는 경고 아이콘
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "⚠"
+                color: "#ff3b30"; font.pixelSize: 64; font.bold: true
+                SequentialAnimation on opacity {
+                    running: pinchOverlay.visible
+                    loops: Animation.Infinite
+                    NumberAnimation { from: 1.0; to: 0.3; duration: 450 }
+                    NumberAnimation { from: 0.3; to: 1.0; duration: 450 }
+                }
+            }
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "끼임 감지 (과전류)"
+                color: "white"; font.pixelSize: 28; font.bold: true
+            }
+            Text {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                lineHeight: 1.3
+                text: vehicleState.pinchPrompt
+                color: "#c9d2df"; font.pixelSize: 18
+            }
+            // 확인 버튼 — 끼인 좌석 전체 래치 해제(resolvePinch)
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: pinchTxt.implicitWidth + 68
+                height: 62; radius: 12
+                color: pinchMa.pressed ? "#c1271f" : "#ff3b30"
+                Text {
+                    id: pinchTxt
+                    anchors.centerIn: parent
+                    text: "확인 — 끼임 해제"
+                    color: "white"; font.pixelSize: 20; font.bold: true
+                }
+                MouseArea {
+                    id: pinchMa
+                    anchors.fill: parent
+                    onClicked: vehicleState.resolvePinch("")
+                }
+            }
+        }
+    }
 }
