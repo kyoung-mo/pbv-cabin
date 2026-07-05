@@ -437,6 +437,7 @@ static void pinch_service(void)
 void StartMotionTask(void *argument)
 {
   (void)argument;
+  uint32_t lastStatusTick = 0;
   for (;;) {
     can_frame_t f;
     while (osMessageQueueGet(canRxQ, &f, NULL, 0) == osOK)
@@ -446,8 +447,15 @@ void StartMotionTask(void *argument)
     pinch_service();                  /* 안티핀치(내부 20ms throttle) */
     /* 이동 중엔 tight-loop로 정밀 스텝(DWT µs) — osDelay(1) 지터가 스텝모터 탈조 유발.
      * 대기 중엔 osDelay로 StatusTask/idle 에 양보(HAL tick=TIM6·DWT는 계속 진행). */
-    if (slide_is_moving()) osThreadYield();
-    else                   osDelay(1);
+    if (slide_is_moving()) {
+      /* 이동 중에도 현재 위치 보고: tight-loop가 StatusTask(Normal)를 기아시키므로,
+       * 여기서 STATUS_PERIOD_MS 주기로 직접 송신한다. 이동 종료 시 StatusTask가 최종 위치를 확정 송신. */
+      uint32_t now = osKernelGetTickCount();
+      if (now - lastStatusTick >= STATUS_PERIOD_MS) { send_status(); lastStatusTick = now; }
+      osThreadYield();
+    } else {
+      osDelay(1);
+    }
   }
 }
 
