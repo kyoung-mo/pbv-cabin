@@ -36,8 +36,11 @@ DBC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 SEAT_CMD_DEF = {
     "driver":     ("Driver_Seat_Cmd",     "Drv_Recline_Angle",  "Drv_Rotation_Angle"),
     "passenger":  ("Passenger_Seat_Cmd",  "Psgr_Recline_Angle", "Psgr_Rotation_Angle"),
-    "rear_left":  ("Rear_Left_Seat_Cmd",  "RL_Recline_Angle",   "RL_Slide_Position"),
-    "rear_right": ("Rear_Right_Seat_Cmd", "RR_Recline_Angle",   "RR_Slide_Position"),
+    # 뒷좌석 좌/우 물리 반전 보정: UI 'rear_left' 키가 실제 좌측 시트를 움직이도록
+    #   CAN 채널을 맞바꾼다. rear_left→0x121(RR_Cmd), rear_right→0x120(RL_Cmd).
+    #   (아래 SEAT_STATUS_DEF 의 피드백 매핑도 동일하게 스왑돼 있어야 closed-loop 유지.)
+    "rear_left":  ("Rear_Right_Seat_Cmd", "RR_Recline_Angle",   "RR_Slide_Position"),
+    "rear_right": ("Rear_Left_Seat_Cmd",  "RL_Recline_Angle",   "RL_Slide_Position"),
 }
 
 # ── 좌석 Status 메시지 → (좌석키, recline 시그널, rotate 시그널|None, pinch 시그널, slide 시그널|None) ──
@@ -49,8 +52,10 @@ SEAT_CMD_DEF = {
 SEAT_STATUS_DEF = {
     "Driver_Seat_Status":     ("driver",     "Curr_Drv_Recline",  "Curr_Drv_Rotate",  "Drv_Pinch_Detected",  None),
     "Passenger_Seat_Status":  ("passenger",  "Curr_Psgr_Recline", "Curr_Psgr_Rotate", "Psgr_Pinch_Detected", None),
-    "Rear_Left_Seat_Status":  ("rear_left",  "Curr_RL_Recline",   None,               "RL_Pinch_Detected",   "Curr_RL_Slide"),
-    "Rear_Right_Seat_Status": ("rear_right", "Curr_RR_Recline",   None,               "RR_Pinch_Detected",   "Curr_RR_Slide"),
+    # 좌/우 물리 반전 보정(SEAT_CMD_DEF 스왑과 짝): 0x120(RL_Status)=실제 우측 → 'rear_right',
+    #   0x121(RR_Status)=실제 좌측 → 'rear_left'. 신호명은 메시지 소속 그대로 유지.
+    "Rear_Left_Seat_Status":  ("rear_right", "Curr_RL_Recline",   None,               "RL_Pinch_Detected",   "Curr_RL_Slide"),
+    "Rear_Right_Seat_Status": ("rear_left",  "Curr_RR_Recline",   None,               "RR_Pinch_Detected",   "Curr_RR_Slide"),
 }
 
 
@@ -168,7 +173,10 @@ class CanHub(QObject):
         if seat == "driver":
             sig["Rolling_Counter"] = self._next_rolling()
             sig["Checksum"] = 0                       # XOR 계산 전 자리 비움
-        if seat == "rear_right":
+        # Cargo_Lamp_Status 는 0x121(RR_Cmd)에만 있는 신호. 좌/우 스왑 후에는 'rear_left'
+        #   키가 이 메시지로 매핑되므로, 좌석 키가 아니라 '메시지가 이 신호를 가졌는지'로
+        #   판단한다(스왑에 안전 — 카고 램프는 좌석 반전과 무관하게 0x121 프레임에 실림).
+        if any(s.name == "Cargo_Lamp_Status" for s in msg.signals):
             sig["Cargo_Lamp_Status"] = int(cargo_lamp)
 
         data = bytearray(msg.encode(sig, strict=True))

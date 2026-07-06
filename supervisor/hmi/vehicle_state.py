@@ -29,9 +29,11 @@ FRONT_SEATS = ("driver", "passenger")
 # 기어 슬라이드 인덱스(UI 배치): 아래(0)=R, 중앙(1)=P, 위(2)=D
 GEARS = ("R", "P", "D")
 
-# 기어 → CAN GearStatus(0x070) Gear 값 인코딩. ECU 합의: P=0(중립,기본) / D=1(전진) / R=2(후진).
-#   슬라이더 위치(GEARS: R-P-D)와는 별개인 CAN 전송 값이다.
-GEAR_CAN_VALUE = {"P": 0, "D": 1, "R": 2}
+# 기어 → CAN GearStatus(0x070) Gear 값 인코딩. 슬라이더 위치(GEARS: R-P-D)와는 별개인 CAN 전송 값.
+#   ECU 합의는 D=1(전진)/R=2(후진)이었으나, 실제 Drive_ECU 가 회전 방향을 반대로 구현해
+#   D=1→후진, R=2→전진으로 동작한다. 펌웨어를 안 고치고 supervisor 에서 보정하기 위해
+#   D/R 코드를 맞바꿔 쏜다 → D=전진, R=후진. (P=0 중립은 그대로.)
+GEAR_CAN_VALUE = {"P": 0, "D": 2, "R": 1}
 
 # 주행(DRIVE) 모드 식별자 — 기어 D/R 진입을 허용하는 유일한 모드
 DRIVE_MODE = "주행"
@@ -976,6 +978,25 @@ class VehicleState(QObject):
         return ""
 
     homingConfirmText = Property(str, _get_homing_confirm_text, notify=homingChanged)
+
+    @Slot()
+    def initFrontSeats(self):
+        """앞좌석 초기 자세를 메인 제어기(supervisor)가 능동 송신: 리클라인 90° / 회전 0°.
+
+        부팅 시 1회 호출(main.py). 앞좌석 ECU 가 자체 원점(0/0)에 있어도 supervisor 가
+        목표 자세를 0x110(운전석)·0x111(조수석)로 쏴 실제 시트를 초기 위치로 맞춘다.
+        운전석은 CanHub 가 Rolling_Counter/Checksum 을 채워 보낸다(체크섬 OK 여야 동작).
+        주행/후진(D/R) 중에는 좌석 액추에이터 명령 금지라 스킵.
+        """
+        if self._gear in ("D", "R"):
+            print("BLOCKED(front-init): 주행/후진 중 앞좌석 초기화 불가")
+            return
+        for seat in FRONT_SEATS:
+            v = self._seat_values[seat]
+            v["recline"]["target"] = v["recline"]["current"] = v["recline"]["commanded"] = 90
+            v["axis2"]["target"] = v["axis2"]["current"] = v["axis2"]["commanded"] = 0
+            self._send_seat(seat)
+        print("INIT: 앞좌석 초기화 송신 — 리클라인 90° / 회전 0° (운전석 0x110 · 조수석 0x111)")
 
     @Slot()
     def homeRearSlides(self):

@@ -83,6 +83,8 @@ def main():
         #   전원 시 놓인 위치를 0으로 간주한다. 절대위치 명령 전에 254(호밍)로 물리 원점을 잡는다.
         #   버스/ECU 가 자리잡도록 잠깐 뒤에 시작(그동안 화면은 homingActive 오버레이로 잠금).
         QTimer.singleShot(1200, state.homeRearSlides)
+        # 앞좌석 초기 자세(리클라인 90°/회전 0°)를 메인 제어기에서 능동 송신(0x110/0x111).
+        QTimer.singleShot(1200, state.initFrontSeats)
 
     # ── 레이싱휠 → Drive_Cmd ──────────────────────────────────────────
     wheel = _make_wheel(can_hub, state)
