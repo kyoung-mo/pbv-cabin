@@ -1,4 +1,4 @@
-/* USER CODE BEGIN Header */
+﻿/* USER CODE BEGIN Header */
 /**
   ******************************************************************************
   * @file           : main.c
@@ -21,9 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "can.h"
-#include "servo.h"
-#include "step.h"
+#include "front_seat_app.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -44,17 +42,12 @@
 /* Private variables ---------------------------------------------------------*/
 CAN_HandleTypeDef hcan;
 
+I2C_HandleTypeDef hi2c1;
+
 TIM_HandleTypeDef htim2;
 
 /* USER CODE BEGIN PV */
-/* 메인 제어기에 다시 보고할 현재 좌석 상태값. */
-static uint8_t curr_driver_recline = 90U;
-static uint8_t curr_passenger_recline = 90U;
-static uint8_t curr_driver_rotation = 0U;
-static uint8_t curr_passenger_rotation = 0U;
-static uint8_t current_gear = 0;
-static uint8_t safe_abort_latched;
-static uint32_t last_status_tick;
+/* 애플리케이션 상태는 front_seat_app.c에서 관리한다. */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -62,230 +55,172 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_CAN_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-/* 서보모터 단독 테스트 모드.
- * 1로 두면 CAN/스텝 제어를 잠시 멈추고 PA0, PA1 서보 PWM만 반복 테스트한다.
- * 테스트가 끝나면 0으로 바꿔서 원래 CAN 좌석 제어 모드로 돌리면 된다.
- */
-#define SERVO_PWM_SELF_TEST  0U
 
-/* CAN 서보 단독 테스트 모드.
- * 1로 두면 CAN 좌석 명령에서 리클라인 각도만 사용하고 서보만 움직인다.
- * 스텝모터 회전 각도 byte는 무시하며 Step_SetTarget()도 호출하지 않는다.
- *
- * - 0x110 Driver_Seat_Cmd    byte0 = 운전석 서보 각도
- * - 0x111 Passenger_Seat_Cmd byte0 = 조수석 서보 각도
- *
- * 서보 CAN 테스트가 끝나고 실제 전체 좌석 동작으로 넘어갈 때는 0으로 바꾸면 된다.
- */
-#define CAN_SERVO_ONLY_TEST_MODE  0U
+/* ===============================
+ * INA226 Continuous Current Test
+ * =============================== */
 
-/* 기구 튜닝값.
- * 28BYJ-48은 홈 센서가 없으므로 전원 켤 때 위치를 회전각 0도로 가정한다.
- * 180도 명령 시 스텝 수가 부족하거나 많으면 *_ROTATION_180_STEPS 값을 조정한다.
- * 조수석 회전 방향이 반대로 나오면 PASSENGER_ROTATION_180_STEPS의 부호만 바꾸면 된다.
- */
-#define DRIVER_ROTATION_180_STEPS       2048L
-#define PASSENGER_ROTATION_180_STEPS   (-2048L)
+#define INA226_TEST_ADDR_DRIVER       (0x40U << 1)
+#define INA226_TEST_ADDR_PASSENGER    (0x41U << 1)
 
-#if SERVO_PWM_SELF_TEST
-static void Servo_PwmSelfTestProcess(void)
+#define INA226_REG_SHUNT_V            0x01U
+#define INA226_REG_BUS_V              0x02U
+#define INA226_RSHUNT_OHM             0.1f
+
+#define INA226_TEST_INTERVAL_MS       20U
+
+typedef struct
 {
-    /* TIM2 설정이 Prescaler=71, Period=19999라서 1카운트 = 1us이다.
-     * SG90 확인용으로 500us, 1500us, 2500us 펄스를 직접 넣는다.
-     * PA0 = TIM2_CH1, PA1 = TIM2_CH2.
-     */
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 500);
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 500);
-    HAL_Delay(1000);
+    uint8_t valid;
 
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 1500);
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 1500);
-    HAL_Delay(1000);
+    float shunt_mV;
+    float bus_V;
+    float current_A;
 
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 2500);
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 2500);
-    HAL_Delay(1000);
+    float current_max_A;
+    float current_min_A;
+    float current_avg_A;
+    float current_sum_A;
 
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 1500);
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 1500);
-    HAL_Delay(1000);
-}
-#endif
+    float bus_min_V;
 
-/* 논리 좌석 번호를 실제 스텝모터 번호로 변환한다. */
-static uint8_t seat_to_motor(SeatId_t seat)
+    uint32_t sample_count;
+} Ina226TestData_t;
+
+/* Watch 창에서 볼 변수 */
+Ina226TestData_t ina226_driver_test;
+Ina226TestData_t ina226_passenger_test;
+
+/* Watch 창에서 1로 바꾸면 측정값 초기화됨 */
+volatile uint8_t ina226_test_reset = 0U;
+
+static uint32_t ina226_test_last_tick = 0U;
+
+static void INA226_TestResetOne(Ina226TestData_t *d)
 {
-    return (seat == SEAT_DRIVER) ? 1U : 2U;
-}
+    d->valid = 0U;
 
-/* 논리 좌석 번호를 실제 서보 채널 번호로 변환한다. */
-static uint8_t seat_to_servo(SeatId_t seat)
-{
-    return (seat == SEAT_DRIVER) ? 1U : 2U;
+    d->shunt_mV = 0.0f;
+    d->bus_V = 0.0f;
+    d->current_A = 0.0f;
+
+    d->current_max_A = 0.0f;
+    d->current_min_A = 99.0f;
+    d->current_avg_A = 0.0f;
+    d->current_sum_A = 0.0f;
+
+    d->bus_min_V = 99.0f;
+
+    d->sample_count = 0U;
 }
 
-/* 선택한 좌석의 현재 리클라인 값 주소를 돌려준다. */
-static uint8_t *seat_recline_ptr(SeatId_t seat)
+static HAL_StatusTypeDef INA226_TestReadReg(uint16_t dev_addr,
+                                            uint8_t reg_addr,
+                                            uint16_t *value)
 {
-    return (seat == SEAT_DRIVER) ? &curr_driver_recline : &curr_passenger_recline;
-}
+    uint8_t buf[2];
 
-/* 선택한 좌석의 현재 회전 각도 값 주소를 돌려준다. */
-static uint8_t *seat_rotation_ptr(SeatId_t seat)
-{
-    return (seat == SEAT_DRIVER) ? &curr_driver_rotation : &curr_passenger_rotation;
-}
-
-/* 회전각 0~180도를 스텝모터 절대 목표 위치로 변환한다. */
-static int32_t rotation_angle_to_steps(SeatId_t seat, uint8_t rotation_angle)
-{
-    int32_t steps_180 = (seat == SEAT_DRIVER) ? DRIVER_ROTATION_180_STEPS : PASSENGER_ROTATION_180_STEPS;
-
-    if (rotation_angle > 180U)
+    if (value == 0)
     {
-        rotation_angle = 180U;
+        return HAL_ERROR;
     }
 
-    return (steps_180 * (int32_t)rotation_angle) / 180L;
-}
-
-static void FrontSeat_ApplyCommand(const SeatCommand_t *cmd)
-{
-    uint8_t recline = cmd->recline_angle;
-    uint8_t rotation = cmd->rotation_angle;
-    uint8_t *curr_recline = seat_recline_ptr(cmd->seat);
-    uint8_t *curr_rotation = seat_rotation_ptr(cmd->seat);
-
-    if (recline > 180U)
+    if (HAL_I2C_Mem_Read(&hi2c1,
+                         dev_addr,
+                         reg_addr,
+                         I2C_MEMADD_SIZE_8BIT,
+                         buf,
+                         2U,
+                         10U) != HAL_OK)
     {
-        recline = 180U;
+        return HAL_ERROR;
     }
 
-    if (rotation > 180U)
+    *value = ((uint16_t)buf[0] << 8) | buf[1];
+    return HAL_OK;
+}
+
+static void INA226_TestUpdateOne(uint16_t dev_addr, Ina226TestData_t *d)
+{
+    uint16_t raw_shunt;
+    uint16_t raw_bus;
+    int16_t signed_shunt;
+
+    if (INA226_TestReadReg(dev_addr, INA226_REG_SHUNT_V, &raw_shunt) != HAL_OK)
     {
-        rotation = 180U;
+        d->valid = 0U;
+        return;
     }
 
-#if CAN_SERVO_ONLY_TEST_MODE
-    /* 서보 단독 테스트 모드:
-     * CAN 명령을 받을 때마다 리클라인 각도를 바로 서보에 넣는다.
-     * 스텝모터는 건드리지 않으므로 서보 문제만 따로 볼 수 있다.
-     */
-    Servo_SetAngle(seat_to_servo(cmd->seat), recline);
-    *curr_recline = recline;
+    if (INA226_TestReadReg(dev_addr, INA226_REG_BUS_V, &raw_bus) != HAL_OK)
+    {
+        d->valid = 0U;
+        return;
+    }
 
-    /* rotation 값은 일부러 무시한다.
-     * 사용하지 않는 지역 변수 경고를 막기 위해 현재값으로 유지만 한다.
-     */
-    (void)rotation;
-    (void)curr_rotation;
-#else
-    /* 실제 제어 모드:
-     * CAN 명령을 받으면 서보 리클라인과 스텝 회전을 모두 목표값으로 갱신한다.
-     */
-    Servo_SetAngle(seat_to_servo(cmd->seat), recline);
-    *curr_recline = recline;
+    signed_shunt = (int16_t)raw_shunt;
 
-    Step_SetTarget(seat_to_motor(cmd->seat), rotation_angle_to_steps(cmd->seat, rotation));
-    *curr_rotation = rotation;
-#endif
+    d->shunt_mV = (float)signed_shunt * 0.0025f;
+    d->bus_V = (float)raw_bus * 0.00125f;
+
+    d->current_A = (d->shunt_mV / 1000.0f) / INA226_RSHUNT_OHM;
+
+    if (d->current_A < 0.0f)
+    {
+        d->current_A = -d->current_A;
+    }
+
+    d->valid = 1U;
+
+    d->sample_count++;
+    d->current_sum_A += d->current_A;
+    d->current_avg_A = d->current_sum_A / (float)d->sample_count;
+
+    if (d->current_A > d->current_max_A)
+    {
+        d->current_max_A = d->current_A;
+    }
+
+    if (d->current_A < d->current_min_A)
+    {
+        d->current_min_A = d->current_A;
+    }
+
+    if (d->bus_V < d->bus_min_V)
+    {
+        d->bus_min_V = d->bus_V;
+    }
 }
 
-static void FrontSeat_StopAll(void)
-{
-    /* 스텝모터를 멈추고 PB2를 로컬 SafeAbort/Stop 표시용으로 켠다. */
-    Step_StopAll();
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
-}
-
-static uint8_t FrontSeat_ReadPinchDetected(SeatId_t seat)
-{
-    /* 끼임감지 센서 자리.
-     * 아직 실제 센서가 연결되지 않았으므로 현재는 항상 0, 즉 끼임 없음으로 보낸다.
-     * 나중에 센서를 GPIO에 연결하면 여기에서 HAL_GPIO_ReadPin()으로 읽어서
-     * 운전석/조수석별 값을 return하면 된다.
-     */
-    (void)seat;
-    return 0U;
-}
-
-static void FrontSeat_SendStatusNow(void)
-{
-    CAN_AppSendSeatStatus(SEAT_DRIVER,
-                          curr_driver_recline,
-                          curr_driver_rotation,
-                          FrontSeat_ReadPinchDetected(SEAT_DRIVER));
-    CAN_AppSendSeatStatus(SEAT_PASSENGER,
-                          curr_passenger_recline,
-                          curr_passenger_rotation,
-                          FrontSeat_ReadPinchDetected(SEAT_PASSENGER));
-}
-
-static void FrontSeat_SendStatusIfDue(void)
+static void INA226_CurrentTest_Process(void)
 {
     uint32_t now = HAL_GetTick();
 
-    /* 운전석/조수석 상태를 5초마다 송신한다. */
-    if ((now - last_status_tick) < 5000U)
+    if (ina226_test_reset != 0U)
+    {
+        ina226_test_reset = 0U;
+        INA226_TestResetOne(&ina226_driver_test);
+        INA226_TestResetOne(&ina226_passenger_test);
+    }
+
+    if ((now - ina226_test_last_tick) < INA226_TEST_INTERVAL_MS)
     {
         return;
     }
-    last_status_tick = now;
 
-    FrontSeat_SendStatusNow();
+    ina226_test_last_tick = now;
+
+    INA226_TestUpdateOne(INA226_TEST_ADDR_DRIVER, &ina226_driver_test);
+    INA226_TestUpdateOne(INA226_TEST_ADDR_PASSENGER, &ina226_passenger_test);
 }
 
-static void FrontSeat_ProcessCanEvents(void)
-{
-    SeatCommand_t cmd;
-    GearStatus_t gear_status;
-    SafeAbort_t safe_abort;
-
-    /* SafeAbort가 최우선이다. Stop_Flag가 1이면 MCU 리셋 전까지 정지 상태를 유지한다. */
-    if (CAN_AppPopSafeAbort(&safe_abort))
-    {
-        if (safe_abort.stop_flag != 0U)
-        {
-            safe_abort_latched = 1U;
-            FrontSeat_StopAll();
-            FrontSeat_SendStatusNow();
-        }
-    }
-
-    if (CAN_AppPopGearStatus(&gear_status))
-    {
-        /* GearStatus는 2비트 신호다. 현재 약속은 0=P, 1=D, 2=R. */
-        current_gear = gear_status.gear;
-    }
-
-    while (CAN_AppPopSeatCommand(&cmd))
-    {
-        /* 체크섬이 틀린 좌석 명령은 무시한다. */
-        if (cmd.checksum_ok == 0U)
-        {
-            continue;
-        }
-
-        /* SafeAbort 이후에는 모든 좌석 이동 명령을 무시한다. */
-        if (safe_abort_latched != 0U)
-        {
-            continue;
-        }
-
-        /* 좌석 재배치, 즉 리클라인/회전 명령은 P 기어에서만 허용한다. */
-        if (current_gear == 0)
-        {
-            FrontSeat_ApplyCommand(&cmd);
-            FrontSeat_SendStatusNow();
-        }
-    }
-}
 /* USER CODE END 0 */
 
 /**
@@ -319,42 +254,23 @@ int main(void)
   MX_GPIO_Init();
   MX_CAN_Init();
   MX_TIM2_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-  /* CubeMX가 생성한 주변장치 초기화가 끝난 뒤 각 기능 블록을 시작한다. */
-  Servo_Init();
-  Step_Init();
-  CAN_AppStart();
-
-  /* 전원 켜진 직후 기본값: 운전석/조수석 모두 정위치. */
-  Servo_SetAngle(1, curr_driver_recline);
-  Servo_SetAngle(2, curr_passenger_recline);
-  Step_SetTarget(1, 0);
-  Step_SetTarget(2, 0);
+  FrontSeatApp_Init(&hi2c1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-#if SERVO_PWM_SELF_TEST
-    Servo_PwmSelfTestProcess();
-    continue;
-#endif
+    FrontSeatApp_Process();
 
-    /* CAN 수신 이벤트는 인터럽트 안이 아니라 main loop에서 처리한다. */
-    FrontSeat_ProcessCanEvents();
-
-    /* 스텝모터 제어는 논블로킹 방식이다. SafeAbort 상태면 이동하지 않는다. */
-    if (safe_abort_latched == 0U)
-    {
-      Step_Process();
-    }
-
-    /* 메인 제어기로 보내는 주기 상태 보고. */
-    FrontSeat_SendStatusIfDue();
+    /* 실제 끼임 복구 동작 테스트할 때는 측정용 I2C 읽기를 끈다. */
+    // INA226_CurrentTest_Process();
   }
   /* USER CODE END 3 */
 }
@@ -436,6 +352,40 @@ static void MX_CAN_Init(void)
 }
 
 /**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
+}
+
+/**
   * @brief TIM2 Initialization Function
   * @param None
   * @retval None
@@ -509,8 +459,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2|GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14
-                          |GPIO_PIN_15, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : PA3 PA4 PA5 PA6 */
   GPIO_InitStruct.Pin = GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6;
@@ -519,10 +468,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB2 PB12 PB13 PB14
-                           PB15 */
-  GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14
-                          |GPIO_PIN_15;
+  /*Configure GPIO pins : PB12 PB13 PB14 PB15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -553,7 +500,7 @@ void Error_Handler(void)
 }
 #ifdef USE_FULL_ASSERT
 /**
-  * @brief  Reports the name of the source file name and line number
+  * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.
   * @param  file: pointer to the source file name
   * @param  line: assert_param error line source number

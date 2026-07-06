@@ -8,6 +8,7 @@ void Step_Init(void);
 void Step_SetTarget(uint8_t motor, int32_t target);
 void Step_Move(uint8_t motor, int16_t steps);
 void Step_Process(void);
+void Step_Stop(uint8_t motor);
 void Step_StopAll(void);
 uint8_t Step_IsMoving(uint8_t motor);
 int32_t Step_GetPosition(uint8_t motor);

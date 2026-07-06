@@ -3,37 +3,67 @@
 
 extern CAN_HandleTypeDef hcan;
 
-/* CAN 수신 인터럽트에서는 플래그만 세우고, main loop에서 Pop 함수로 꺼내 처리한다. */
-static volatile SeatCommand_t rx_cmd;
-static volatile uint8_t rx_cmd_pending;
-static volatile GearStatus_t rx_gear_status;
-static volatile uint8_t rx_gear_pending;
-static volatile SafeAbort_t rx_safe_abort;
-static volatile uint8_t rx_safe_abort_pending;
+#define CAN_RX_CMD_QUEUE_SIZE  8U
+
+typedef struct
+{
+    SeatCommand_t buf[CAN_RX_CMD_QUEUE_SIZE];
+    volatile uint8_t head;
+    volatile uint8_t tail;
+    volatile uint8_t overflow;
+} CanCommandQueue_t;
+
+static volatile CanCommandQueue_t seat_cmd_q;
+static volatile GearStatus_t gear_rx;
+static volatile uint8_t gear_pending;
+static volatile SafeAbort_t abort_rx;
+static volatile uint8_t abort_pending;
 
 static uint32_t tx_mailbox;
 
-/* STM32 HAL의 16비트 CAN 필터는 표준 ID를 왼쪽으로 5비트 밀어서 넣는다. */
 static uint16_t can_std_filter_value(uint16_t std_id)
 {
     return (uint16_t)(std_id << 5);
 }
 
-/* Driver_Seat_Cmd 체크섬.
- * DBC에는 Checksum 신호만 있고 계산식은 없어서,
- * 현재는 byte0 + byte1 + byte2의 하위 8비트로 검증한다.
- * 메인 제어기 체크섬 규칙이 다르면 이 함수만 바꾸면 된다.
- */
-static uint8_t can_driver_cmd_checksum(const uint8_t data[4])
+static uint8_t driver_cmd_checksum(const uint8_t data[4])
 {
     return (uint8_t)(data[0] + data[1] + data[2]);
+}
+
+static void queue_clear(void)
+{
+    seat_cmd_q.head = 0U;
+    seat_cmd_q.tail = 0U;
+    seat_cmd_q.overflow = 0U;
+}
+
+static void queue_push_from_isr(const SeatCommand_t *cmd)
+{
+    uint8_t next_head;
+
+    if (cmd == 0)
+    {
+        return;
+    }
+
+    next_head = (uint8_t)((seat_cmd_q.head + 1U) % CAN_RX_CMD_QUEUE_SIZE);
+
+    /* Queue full: 오래된 명령을 버리고 최신 명령을 남긴다. */
+    if (next_head == seat_cmd_q.tail)
+    {
+        seat_cmd_q.tail = (uint8_t)((seat_cmd_q.tail + 1U) % CAN_RX_CMD_QUEUE_SIZE);
+        seat_cmd_q.overflow = 1U;
+    }
+
+    seat_cmd_q.buf[seat_cmd_q.head] = *cmd;
+    seat_cmd_q.head = next_head;
 }
 
 static void can_filter_init(void)
 {
     CAN_FilterTypeDef f = {0};
 
-    /* 프론트 존 ECU가 받아야 하는 명령 ID만 통과시킨다. */
     f.FilterBank = 0;
     f.FilterMode = CAN_FILTERMODE_IDLIST;
     f.FilterScale = CAN_FILTERSCALE_16BIT;
@@ -52,6 +82,10 @@ static void can_filter_init(void)
 
 void CAN_AppStart(void)
 {
+    queue_clear();
+    gear_pending = 0U;
+    abort_pending = 0U;
+
     can_filter_init();
 
     if (HAL_CAN_Start(&hcan) != HAL_OK)
@@ -67,46 +101,67 @@ void CAN_AppStart(void)
 
 uint8_t CAN_AppPopSeatCommand(SeatCommand_t *cmd)
 {
-    if (rx_cmd_pending == 0U || cmd == 0)
+    if (cmd == 0)
     {
         return 0U;
     }
 
     __disable_irq();
-    *cmd = rx_cmd;
-    rx_cmd_pending = 0U;
-    __enable_irq();
 
+    if (seat_cmd_q.head == seat_cmd_q.tail)
+    {
+        __enable_irq();
+        return 0U;
+    }
+
+    *cmd = seat_cmd_q.buf[seat_cmd_q.tail];
+    seat_cmd_q.tail = (uint8_t)((seat_cmd_q.tail + 1U) % CAN_RX_CMD_QUEUE_SIZE);
+
+    __enable_irq();
     return 1U;
 }
 
 uint8_t CAN_AppPopGearStatus(GearStatus_t *status)
 {
-    if (rx_gear_pending == 0U || status == 0)
+    if (status == 0)
     {
         return 0U;
     }
 
     __disable_irq();
-    *status = rx_gear_status;
-    rx_gear_pending = 0U;
-    __enable_irq();
 
+    if (gear_pending == 0U)
+    {
+        __enable_irq();
+        return 0U;
+    }
+
+    *status = gear_rx;
+    gear_pending = 0U;
+
+    __enable_irq();
     return 1U;
 }
 
 uint8_t CAN_AppPopSafeAbort(SafeAbort_t *abort_msg)
 {
-    if (rx_safe_abort_pending == 0U || abort_msg == 0)
+    if (abort_msg == 0)
     {
         return 0U;
     }
 
     __disable_irq();
-    *abort_msg = rx_safe_abort;
-    rx_safe_abort_pending = 0U;
-    __enable_irq();
 
+    if (abort_pending == 0U)
+    {
+        __enable_irq();
+        return 0U;
+    }
+
+    *abort_msg = abort_rx;
+    abort_pending = 0U;
+
+    __enable_irq();
     return 1U;
 }
 
@@ -116,19 +171,14 @@ void CAN_AppSendSeatStatus(SeatId_t seat,
                            uint8_t pinch_detected)
 {
     CAN_TxHeaderTypeDef header = {0};
-    uint8_t data[3] = {0};
+    uint8_t data[3];
 
     header.StdId = (seat == SEAT_DRIVER) ? CAN_ID_DRIVER_SEAT_STATUS : CAN_ID_PASSENGER_SEAT_STATUS;
     header.IDE = CAN_ID_STD;
     header.RTR = CAN_RTR_DATA;
-    header.DLC = 3;
+    header.DLC = 3U;
     header.TransmitGlobalTime = DISABLE;
 
-    /* Driver_Seat_Status(0x210), Passenger_Seat_Status(0x211), Length 3
-     * byte0 = 현재 리클라이너 각도, 즉 서보모터 각도
-     * byte1 = 현재 회전 각도, 즉 스텝모터 목표 각도
-     * byte2 bit0 = 끼임감지 센서값
-     */
     data[0] = curr_recline;
     data[1] = curr_rotation;
     data[2] = (uint8_t)(pinch_detected & 0x01U);
@@ -136,9 +186,28 @@ void CAN_AppSendSeatStatus(SeatId_t seat,
     (void)HAL_CAN_AddTxMessage(&hcan, &header, data, &tx_mailbox);
 }
 
+static void decode_driver_cmd(const uint8_t data[4], SeatCommand_t *cmd)
+{
+    cmd->seat = SEAT_DRIVER;
+    cmd->recline_angle = data[0];
+    cmd->rotation_angle = data[1];
+    cmd->rolling_counter = (uint8_t)(data[2] & 0x0FU);
+    cmd->checksum_ok = (data[3] == driver_cmd_checksum(data)) ? 1U : 0U;
+}
+
+static void decode_passenger_cmd(const uint8_t data[2], SeatCommand_t *cmd)
+{
+    cmd->seat = SEAT_PASSENGER;
+    cmd->recline_angle = data[0];
+    cmd->rotation_angle = data[1];
+    cmd->rolling_counter = 0U;
+    cmd->checksum_ok = 1U;
+}
+
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *can_handle)
 {
     CAN_RxHeaderTypeDef header;
+    SeatCommand_t cmd;
     uint8_t data[8];
 
     if (HAL_CAN_GetRxMessage(can_handle, CAN_RX_FIFO0, &header, data) != HAL_OK)
@@ -151,38 +220,43 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *can_handle)
         return;
     }
 
-    if (header.StdId == CAN_ID_SAFE_ABORT && header.DLC >= 3U)
+    switch (header.StdId)
     {
-        /* SafeAbort(0x010), Length 3 */
-        rx_safe_abort.stop_flag = (uint8_t)(data[0] & 0x01U);
-        rx_safe_abort.source_id = data[1];
-        rx_safe_abort.reason_code = data[2];
-        rx_safe_abort_pending = 1U;
-    }
-    else if (header.StdId == CAN_ID_GEAR_STATUS && header.DLC >= 1U)
-    {
-        /* GearStatus(0x070), Length 1 */
-        rx_gear_status.gear = (uint8_t)(data[0] & 0x03U);
-        rx_gear_pending = 1U;
-    }
-    else if (header.StdId == CAN_ID_DRIVER_SEAT_CMD && header.DLC >= 4U)
-    {
-        /* Driver_Seat_Cmd(0x110), Length 4 */
-        rx_cmd.seat = SEAT_DRIVER;
-        rx_cmd.recline_angle = data[0];
-        rx_cmd.rotation_angle = data[1];
-        rx_cmd.rolling_counter = (uint8_t)(data[2] & 0x0FU);
-        rx_cmd.checksum_ok = (data[3] == can_driver_cmd_checksum(data)) ? 1U : 0U;
-        rx_cmd_pending = 1U;
-    }
-    else if (header.StdId == CAN_ID_PASSENGER_SEAT_CMD && header.DLC >= 2U)
-    {
-        /* Passenger_Seat_Cmd(0x111), Length 2 */
-        rx_cmd.seat = SEAT_PASSENGER;
-        rx_cmd.recline_angle = data[0];
-        rx_cmd.rotation_angle = data[1];
-        rx_cmd.rolling_counter = 0U;
-        rx_cmd.checksum_ok = 1U;
-        rx_cmd_pending = 1U;
+    case CAN_ID_SAFE_ABORT:
+        if (header.DLC >= 3U)
+        {
+            abort_rx.stop_flag = (uint8_t)(data[0] & 0x01U);
+            abort_rx.source_id = data[1];
+            abort_rx.reason_code = data[2];
+            abort_pending = 1U;
+        }
+        break;
+
+    case CAN_ID_GEAR_STATUS:
+        if (header.DLC >= 1U)
+        {
+            gear_rx.gear = (uint8_t)(data[0] & 0x03U);
+            gear_pending = 1U;
+        }
+        break;
+
+    case CAN_ID_DRIVER_SEAT_CMD:
+        if (header.DLC >= 4U)
+        {
+            decode_driver_cmd(data, &cmd);
+            queue_push_from_isr(&cmd);
+        }
+        break;
+
+    case CAN_ID_PASSENGER_SEAT_CMD:
+        if (header.DLC >= 2U)
+        {
+            decode_passenger_cmd(data, &cmd);
+            queue_push_from_isr(&cmd);
+        }
+        break;
+
+    default:
+        break;
     }
 }
