@@ -60,6 +60,10 @@ SLIDE_REZERO_CMD = 255
 #   255(0xFF)를 보고한다 → 255 = 원점 미확정(호밍 필요), 0~100 = 실측 위치(mm).
 #   DBC range 가 [0|100]이어도 cantools decode 는 클램프를 안 해 255 가 그대로 들어온다.
 SLIDE_POS_UNKNOWN = 255
+# 원점확정(homed) 판정 상한: 보고 slide 가 이 값 이하이면 '실측 위치(원점확정)'로 본다.
+#   255=미확정 하나만 쓰지만, 255 근처 여유를 둬서 251~255 를 모두 '미확정'으로 처리(노이즈 마진).
+#   하한은 0(재영점되면 펌웨어가 정확히 0을 보고하므로 0 을 반드시 포함해야 ack 가 온다).
+SLIDE_POS_VALID_MAX = 250
 REAR_SEATS = ("rear_left", "rear_right")
 # 원점 정렬은 사용자 확인 스텝으로 진행한다(자동 완료판정 X):
 #   왼쪽 정렬(자동 시작) → [확인] → 오른쪽 정렬 → [확인] → 주행 자세 원복.
@@ -77,7 +81,16 @@ SLIDE_MOVE_MARGIN_MS = 800  # 가속/정지 여유(고정)
 #   이동 중엔 리어 상태(0x220/0x221) 송신이 끊기고(MotionTask tight-loop 가 StatusTask 기아),
 #   완료되면 재개된다 → 명령 후 가드 시간 지난 뒤 처음 들어온 리어 상태 = 완료. 타이머는 폴백.
 SLIDE_DONE_GUARD_MS = 700      # 명령 직후 이 시간 내 리어 상태는 '이동 시작 전 잔여'로 무시
-SLIDE_MOVE_TIMEOUT_MS = 70000  # 폴백: 최악 풀스트로크(~50s, 부하 시) + 여유. 상태 못 잡을 때만
+SLIDE_MOVE_TIMEOUT_MS = 15000  # 폴백: 상태 피드백 없을 때 이 시간 뒤 다음 축으로. 30mm 이동시간에 맞춤
+SLIDE_DONE_TOL_MM = 1          # 완료 판정 허용오차(mm): 보고 위치가 target ±이 값 안이면 도달로 본다
+
+# ── 뒷좌석 명령 반복 송신(프레임 드롭 방지) ──────────────────────────────────
+#   호밍/재영점(254/255)·주행자세 원복(30) 같은 one-shot 명령은 한 번 씹히면 그대로 실패하므로
+#   같은 프레임(0x120/0x121)을 짧은 간격으로 여러 번 보낸다. 센티넬·목표위치는 모두 idempotent 라
+#   중복 수신해도 안전하고, 총 span=(N-1)×간격 이 SLIDE_DONE_GUARD_MS(700) 안이라 완료판정도 무해.
+SEAT_CMD_REPEAT = 5            # 반복 횟수
+SEAT_CMD_REPEAT_MS = 100      # 반복 간격(ms). 5×100 = 400ms < 700ms 가드
+REZERO_ACK_TIMEOUT_MS = 2000  # 재영점 255 ack(상태=원점확정) 최대 대기. 초과 시 그냥 진행(무한대기 방지)
 
 # ── 모드 프리셋 ──────────────────────────────────────────────────────────────
 # 모드 타일을 누르면 아래 값으로 4개 좌석 target 을 세팅하고 즉시 "적용"(트윈)한다.
@@ -127,6 +140,7 @@ class VehicleState(QObject):
     homingChanged = Signal()      # 뒷좌석 슬라이드 호밍(원점 정렬) 진행 상태가 바뀜
     driveStatusChanged = Signal() # Drive_Status(현재속도 등) 수신 반영
     wheelInputChanged = Signal()  # 레이싱휠 조향/페달 실시간 입력(화면 표시용)
+    safeAbortChanged = Signal()   # SafeAbort(0x010) 비상정지 발동/해제 상태가 바뀜
 
     def __init__(self, can_hub=None, parent=None):
         super().__init__(parent)
@@ -182,6 +196,8 @@ class VehicleState(QObject):
         # 좌석별 과전류 긴급정지(각 좌석 과전류 센서 → 긴급정지). CAN 수신 방식 미정 →
         #   지금은 setSeatEstop(seat, on) 슬롯으로만 세팅(테스트/후속 CAN 배선 훅).
         self._estop = {seat: False for seat in SEAT_LABELS}
+        # SafeAbort(0x010) 비상정지 발동 여부(감시 노드 수신 → 전체 화면 빨강 경보).
+        self._safe_abort = False
         # Drive_Status 반영(현재 속도 RPM)
         self._current_velocity = 0.0
         # 레이싱휠 실시간 입력(화면 표시용) — 인터록과 무관하게 항상 갱신
@@ -211,10 +227,25 @@ class VehicleState(QObject):
         self._home_seq = ""
         # 원점 정렬 후 주행 자세 원복이 끝나면 모드 선택 화면으로 넘어가기 위한 플래그.
         self._post_home_to_modes = False
-        # 뒷좌석 슬라이드 직렬화 완료 폴백 타이머(상태 재개를 못 잡을 때만 사용).
+        # 뒷좌석 슬라이드 직렬화 완료 폴백 타이머(위치도달을 못 잡을 때만 사용).
         self._slide_timer = QTimer(self)
         self._slide_timer.setInterval(200)
         self._slide_timer.timeout.connect(self._slide_poll)
+        # 뒷좌석 슬라이드 완료판정 타깃(직렬화로 구동 중인 축의 목표 mm). None=구동 없음.
+        self._slide_target = None
+        # 호밍 254 반복 송신 타이머 — 확인 전까지 현재 단계(_home_seq) 축에 100ms 주기로 계속 쏜다.
+        #   센서 없는 하드스톱 호밍이라 확인 전엔 계속 밀어야 하고, 프레임이 씹혀도 다음 틱이 만회한다.
+        self._home_timer = QTimer(self)
+        self._home_timer.setInterval(SEAT_CMD_REPEAT_MS)   # 100ms
+        self._home_timer.timeout.connect(self._home_tx_tick)
+        # 재영점(255) ack 재전송 — 확인 눌러도 255가 씹히면 펌웨어가 homeRemaining>0 이라 계속
+        #   호밍(원점쪽)한다. 그 좌석이 상태로 원점확정(slide≠255)을 보고할 때까지 255를 재전송한다.
+        self._rezero_timer = QTimer(self)
+        self._rezero_timer.setInterval(SEAT_CMD_REPEAT_MS)  # 100ms
+        self._rezero_timer.timeout.connect(self._rezero_tx_tick)
+        self._rezero_seat = None      # 재영점 ack 대기 중인 좌석(None=대기 없음)
+        self._rezero_after = None     # ack(또는 타임아웃) 후 실행할 다음 단계
+        self._rezero_deadline = 0.0
 
     # =====================================================================
     # gear
@@ -618,11 +649,19 @@ class VehicleState(QObject):
         """
         if seat not in self._seat_values:
             return
-        # 뒷좌석 슬라이드 직렬화 완료 판정: 구동 중엔 리어 상태가 끊겼다 완료 시 재개된다.
-        #   가드 시간 지난 뒤 처음 들어온 리어(0x220/0x221) 상태 = 현재 슬라이드 완료 → 다음 시작.
-        if self._slide_busy is not None and seat in REAR_SEATS:
-            if time.monotonic() * 1000.0 - self._slide_started >= SLIDE_DONE_GUARD_MS:
-                self._finish_rear_slide("상태재개")
+        # 재영점(255) ack: 그 좌석이 원점확정(slide 0~100, 255아님)을 보고하면 호밍이 실제로 꺼진 것.
+        #   → 255 재전송 종료 + 다음 단계(오른쪽 호밍 / 주행 원복)로 진행. (호밍 중 feedback 가드보다 먼저 처리)
+        if self._rezero_seat == seat and 0 <= slide <= SLIDE_POS_VALID_MAX:
+            self._rezero_ack(seat)
+        # 뒷좌석 슬라이드 직렬화 완료 판정(위치 기반): slide4 는 이동 중에도 현재 위치(Curr_*_Slide)를
+        #   100ms 주기로 계속 보낸다 → '구동 중인 축의 보고 위치가 target 에 도달'하면 완료로 보고
+        #   다음 축을 시작한다. 도달 전엔 다음 축을 시작하지 않아 두 리니어 동시 구동을 막는다.
+        #   (예전 '상태 끊김→재개' 판정은 slide4 가 이동 중에도 보내므로 조기 완료→동시구동 유발. 폐기.)
+        #   폴백: 위치를 못 잡을 때만 _slide_poll 타임아웃.
+        if self._slide_busy == seat and self._slide_target is not None \
+                and 0 <= slide <= SLIDE_POS_VALID_MAX \
+                and abs(slide - self._slide_target) <= SLIDE_DONE_TOL_MM:
+            self._finish_rear_slide("위치도달")
         changed = False
         r = self._seat_values[seat]["recline"]
         if r["current"] != recline:
@@ -784,6 +823,41 @@ class VehicleState(QObject):
                 print(f"E-STOP: {SEAT_LABELS[seat]} 과전류 긴급정지!")
             self.estopChanged.emit()
 
+    # --- SafeAbort(0x010) 비상정지: QML 이 safeAbort 로 바인딩(전체 화면 빨강 경보) ---
+    def _get_safe_abort(self):
+        return self._safe_abort
+
+    safeAbort = Property(bool, _get_safe_abort, notify=safeAbortChanged)
+
+    @Slot(bool)
+    def onSafeAbort(self, active):
+        """CanHub.safeAbortReceived(감시 노드 0x010) → 비상정지 발동/해제 상태 반영.
+
+        QueuedConnection 으로 연결(RX 스레드 → GUI 스레드). active=Stop_Flag.
+        """
+        active = bool(active)
+        if self._safe_abort == active:
+            return
+        self._safe_abort = active
+        print(f"SAFE-ABORT: {'발동' if active else '해제'} (0x010)")
+        self.safeAbortChanged.emit()
+
+    @Slot()
+    def clearSafeAbort(self):
+        """SafeAbort 해제 버튼 → CAN 으로 0x010 해제 명령(Stop_Flag=0 / 00 01 01) 송신.
+
+        감시 노드/각 ECU 의 비상정지 래치를 풀고, 로컬 경보(빨강 깜빡임)도 즉시 내린다.
+        (감시 노드가 계속 발동 프레임을 보내오면 다음 수신에서 다시 켜진다 — 정상 동작.)
+        """
+        if self._can:
+            self._can.send_safe_abort_release()
+            print("SAFE-ABORT: 해제 명령 송신(0x010 Stop_Flag=0 / 00 01 01)")
+        else:
+            print("[NO-CAN] SAFE-ABORT 해제 명령(0x010 00 01 01)")
+        if self._safe_abort:
+            self._safe_abort = False
+            self.safeAbortChanged.emit()
+
     # --- Drive_Status: 현재 속도(RPM) ---
     def _get_current_velocity(self):
         return self._current_velocity
@@ -848,6 +922,20 @@ class VehicleState(QObject):
             name = "회전" if seat in FRONT_SEATS else "슬라이드"
             shown = slide_override if slide_override is not None else axis2
             print(f"[NO-CAN] SEAT_CMD {SEAT_LABELS[seat]} 리클라인={recline} {name}={shown}")
+
+    def _send_seat_burst(self, seat, slide_override=None,
+                         count=SEAT_CMD_REPEAT, interval_ms=SEAT_CMD_REPEAT_MS):
+        """one-shot 좌석 명령을 count 회(interval_ms 간격) 반복 송신 — CAN 프레임 드롭 방지.
+
+        호밍(254)/재영점(255)/주행자세 원복(30) 처럼 '한 번만 나가는' 명령이 씹히면 그대로
+        실패하므로, 같은 프레임을 짧게 여러 번 보낸다. 센티넬·목표위치는 idempotent 라 중복 수신
+        무해하고, 총 span=(count-1)×interval_ms 가 SLIDE_DONE_GUARD_MS 안이라 완료판정도 안 깨진다.
+        즉시 1회 + 이후 QTimer.singleShot 으로 나머지(모두 GUI 스레드에서 실행).
+        """
+        self._send_seat(seat, slide_override=slide_override)          # 즉시 1회
+        for i in range(1, count):
+            QTimer.singleShot(i * interval_ms,
+                              lambda s=seat, o=slide_override: self._send_seat(s, slide_override=o))
 
     def _axis2_closed_loop(self, seat):
         """앞좌석 회전 = Curr_*_Rotate 실시간 closed-loop. 뒷좌석 슬라이드 = 이동 중엔 open-loop
@@ -918,13 +1006,14 @@ class VehicleState(QObject):
     def _start_rear_slide(self, seat):
         """뒷좌석 1개의 슬라이드 프레임(리클라인+슬라이드)을 실제 송신하고 busy 로 잠근다."""
         self._slide_busy = seat
+        self._slide_target = int(self._seat_values[seat]["axis2"]["target"])  # 위치기반 완료판정 기준
         now = time.monotonic() * 1000.0
         self._slide_started = now
         self._slide_deadline = now + SLIDE_MOVE_TIMEOUT_MS
-        self._send_seat(seat)                # recline + slide 한 프레임
-        self._mark_commit(seat, "recline")   # 리클라인(closed-loop) commanded
-        self._mark_commit(seat, "axis2")     # 슬라이드(open-loop) 3D 트윈 시작
-        print(f"SLIDE: {SEAT_LABELS[seat]} 슬라이드 구동 시작(직렬화)")
+        self._send_seat_burst(seat)          # recline + slide 한 프레임(드롭 방지 5회 반복)
+        self._mark_commit(seat, "recline")   # 리클라인(closed-loop) commanded (1회만)
+        self._mark_commit(seat, "axis2")     # 슬라이드(open-loop) 3D 트윈 시작 (1회만)
+        print(f"SLIDE: {SEAT_LABELS[seat]} 슬라이드 구동 시작(직렬화, 명령 5회 반복)")
         if not self._slide_timer.isActive():
             self._slide_timer.start()
         self.seatMovingChanged.emit()
@@ -935,6 +1024,7 @@ class VehicleState(QObject):
         if seat is None:
             return
         self._slide_busy = None
+        self._slide_target = None
         print(f"SLIDE: {SEAT_LABELS[seat]} 슬라이드 완료({reason})")
         self.seatMovingChanged.emit()
         self._pump_rear_slide()          # 대기 중이면 다음 슬라이드 시작
@@ -942,10 +1032,16 @@ class VehicleState(QObject):
         self._check_post_home()
 
     def _slide_poll(self):
-        """폴백: 리어 상태 재개를 못 잡아도 데드라인 지나면 완료로 간주(직렬 멈춤 방지)."""
+        """구동 중인 슬라이드에 대해 200ms마다: (1) 명령 재전송(드롭 방지), (2) 데드라인 폴백.
+
+        재전송은 idempotent(같은 target 재설정)이라 무해하고, 위치기반 완료판정(onSeatStatus)이
+        '보고 위치 = target' 을 잡는 순간 busy 가 풀려 재전송도 멈춘다. 보고값은 항상 target 에
+        정확히 도달하므로(open-loop) 재전송은 자연히 종료된다 — 무한루프 없음.
+        명령 자체가 씹혀 아예 안 움직인 경우를 이 재전송이 만회한다(70s 타임아웃 대기 방지)."""
         if self._slide_busy is None:
             self._slide_timer.stop()
             return
+        self._send_seat(self._slide_busy)                 # 도달 전까지 재전송(드롭 만회)
         if time.monotonic() * 1000.0 >= self._slide_deadline:
             self._finish_rear_slide("타임아웃")
 
@@ -1017,10 +1113,31 @@ class VehicleState(QObject):
             return
         self._rear_homed = {seat: False for seat in REAR_SEATS}
         self._home_seq = "left"
-        self._send_seat("rear_left", slide_override=SLIDE_HOME_CMD)
-        print("HOME: ① 왼쪽 뒷좌석 원점 정렬 시작(254) — 완료되면 확인 버튼")
+        self._start_home_tx()          # 왼쪽 254(호밍)을 100ms 주기로 계속 송신(확인 전까지)
+        print("HOME: ① 왼쪽 뒷좌석 원점 정렬 시작(254 반복) — 완료되면 확인 버튼")
         self.homingChanged.emit()
         self.seatMovingChanged.emit()
+
+    # ── 호밍 254 반복 송신(확인 전까지 계속, 확인 시 즉시 중단) ──────────────────
+    def _home_tx_tick(self):
+        """현재 호밍 단계(_home_seq)의 축에 254(호밍) 프레임을 1회 송신. 100ms 타이머가 반복 호출.
+        _home_seq 가 비면 스스로 멈춘다(확인 버튼이 _stop_home_tx 로 이미 껐어도 안전망)."""
+        if self._home_seq == "left":
+            self._send_seat("rear_left", slide_override=SLIDE_HOME_CMD)
+        elif self._home_seq == "right":
+            self._send_seat("rear_right", slide_override=SLIDE_HOME_CMD)
+        else:
+            self._home_timer.stop()
+
+    def _start_home_tx(self):
+        """호밍 254 반복 송신 시작 — 즉시 1회 + 100ms 주기. (확인 버튼이 _stop_home_tx 로 끈다.)"""
+        self._home_tx_tick()                       # 첫 프레임 즉시
+        if not self._home_timer.isActive():
+            self._home_timer.start()
+
+    def _stop_home_tx(self):
+        """호밍 254 반복 송신 중단(확인 버튼이 눌린 순간 호출)."""
+        self._home_timer.stop()
 
     def _mark_home_done(self, seat):
         """해당 좌석 원점 확정: 슬라이드 0(원점)으로 트윈 값도 맞춘다."""
@@ -1039,24 +1156,68 @@ class VehicleState(QObject):
           left  → 왼쪽 재영점 후 오른쪽을 끝으로 이동(254) 시작.
           right → 오른쪽 재영점 후 주행 자세로 원복(왼쪽 30 → 오른쪽 30 순차) → 모드 선택 화면.
         """
+        if self._rezero_seat is not None:
+            return   # 이미 재영점 ack 대기 중 — 중복 입력 무시
         if self._home_seq == "left":
-            self._send_seat("rear_left", slide_override=SLIDE_REZERO_CMD)  # 여기가 0
-            self._mark_home_done("rear_left")
-            self._home_seq = "right"
-            self._send_seat("rear_right", slide_override=SLIDE_HOME_CMD)   # 오른쪽 끝으로 이동
-            print("HOME: 왼쪽 재영점(255) → ② 오른쪽 끝으로 이동 시작(254)")
-            self.homingChanged.emit()
-            self.seatValuesChanged.emit()
-            self.seatMovingChanged.emit()
+            self._stop_home_tx()                                     # 왼쪽 254 반복 중단
+            # 왼쪽 255를 '원점확정 보고'까지 재전송 → 확인되면 오른쪽 호밍 시작.
+            self._begin_rezero("rear_left", self._after_left_rezero)
         elif self._home_seq == "right":
-            self._send_seat("rear_right", slide_override=SLIDE_REZERO_CMD)  # 여기가 0
-            self._mark_home_done("rear_right")
-            self._home_seq = ""
-            print("HOME: 오른쪽 재영점(255) → ③ 주행 자세로 원복")
-            self.homingChanged.emit()
-            self.seatValuesChanged.emit()
-            self.seatMovingChanged.emit()
-            self._restore_drive_pose()
+            self._stop_home_tx()                                     # 오른쪽 254 반복 중단
+            self._begin_rezero("rear_right", self._after_right_rezero)
+
+    # ── 재영점(255) ack 재전송: 펌웨어가 원점확정(slide≠255) 보고할 때까지 255 반복 ──────
+    def _begin_rezero(self, seat, after):
+        """255(재영점)를 그 좌석이 상태로 원점확정을 보고할 때까지 100ms 주기로 재전송.
+        확인되면(또는 타임아웃) after() 실행. 255가 씹혀 호밍이 안 꺼지는 문제(원점쪽 계속 이동) 방지."""
+        self._rezero_seat = seat
+        self._rezero_after = after
+        self._rezero_deadline = time.monotonic() * 1000.0 + REZERO_ACK_TIMEOUT_MS
+        print(f"HOME: {SEAT_LABELS[seat]} 재영점(255) — 원점확정 보고까지 재전송")
+        self._rezero_tx_tick()                                       # 즉시 1회
+        if not self._rezero_timer.isActive():
+            self._rezero_timer.start()
+
+    def _rezero_tx_tick(self):
+        if self._rezero_seat is None:
+            self._rezero_timer.stop()
+            return
+        self._send_seat(self._rezero_seat, slide_override=SLIDE_REZERO_CMD)
+        if time.monotonic() * 1000.0 >= self._rezero_deadline:      # ack 못 받아도 무한대기 방지
+            print(f"HOME: {SEAT_LABELS[self._rezero_seat]} 재영점 ack 타임아웃 — 그대로 진행")
+            self._finish_rezero()
+
+    def _rezero_ack(self, seat):
+        """onSeatStatus 가 그 좌석의 원점확정(slide≠255)을 보면 호출 → 재전송 종료 + 다음 단계."""
+        if self._rezero_seat == seat:
+            print(f"HOME: {SEAT_LABELS[seat]} 재영점 확인됨(원점확정 보고)")
+            self._finish_rezero()
+
+    def _finish_rezero(self):
+        self._rezero_timer.stop()
+        after = self._rezero_after
+        self._rezero_seat = None
+        self._rezero_after = None
+        if after:
+            after()
+
+    def _after_left_rezero(self):
+        self._mark_home_done("rear_left")
+        self._home_seq = "right"
+        self._start_home_tx()                                       # 오른쪽 254 반복 시작
+        print("HOME: → ② 오른쪽 254 반복 시작(끝에 붙으면 확인)")
+        self.homingChanged.emit()
+        self.seatValuesChanged.emit()
+        self.seatMovingChanged.emit()
+
+    def _after_right_rezero(self):
+        self._mark_home_done("rear_right")
+        self._home_seq = ""
+        print("HOME: → ③ 주행 자세로 원복")
+        self.homingChanged.emit()
+        self.seatValuesChanged.emit()
+        self.seatMovingChanged.emit()
+        self._restore_drive_pose()
 
     def _restore_drive_pose(self):
         """원점 정렬 완료 후 주행 자세로 원복(주행 프리셋을 4좌석에 적용).

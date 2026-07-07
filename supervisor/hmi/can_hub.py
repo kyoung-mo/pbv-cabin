@@ -90,6 +90,8 @@ class CanHub(QObject):
     #   slide  = 뒷좌석 Curr_*_Slide(슬라이드 위치 0~100mm, 255=원점 미확정). 앞좌석은 -1.
     seatStatusReceived = Signal(str, int, int, bool, int)  # (seat, recline, rotate|-1, pinch, slide|-1)
     driveStatusReceived = Signal(float, int, int)      # (velocity_rpm, motor_mA, gear)
+    # SafeAbort(0x010) 수신 → GUI. active=Stop_Flag(1=비상정지 발동 / 0=해제).
+    safeAbortReceived = Signal(bool)
     busError = Signal(str)
 
     def __init__(self, iface=CAN_IFACE, dbc_path=DBC_PATH, parent=None):
@@ -114,6 +116,7 @@ class CanHub(QObject):
         self._drive_cmd = self._db.get_message_by_name("Drive_Cmd")
         self._gear_status = self._db.get_message_by_name("GearStatus")
         self._heartbeat = self._db.get_message_by_name("Heartbeat")
+        self._safe_abort = self._db.get_message_by_name("SafeAbort")   # 0x010 비상정지
         self._drive_status_id = self._db.get_message_by_name("Drive_Status").frame_id
 
         # 수신 디스패치 테이블: frame_id → (seat_key, recline_sig, rotate_sig|None, pinch_sig)
@@ -216,6 +219,19 @@ class CanHub(QObject):
         }
         self._send(m.frame_id, m.encode(sig, strict=True))
 
+    def send_safe_abort_release(self):
+        """SafeAbort(0x010) 해제 명령 송신 — Stop_Flag=0 으로 비상정지 래치를 푼다.
+
+        canusb 기준(sudo ./canusb ... -i 010 -j 000101)과 동일한 프레임을 만든다:
+          data = 00 01 01 → byte0 Stop_Flag=0(해제) / byte1 Source_Id=1(Central_Supervisor)
+                            / byte2 Reason_Code=1.
+        감시 노드(Monitor_Node)·각 ECU 가 이 프레임을 받아 SafeAbort 래치를 해제한다.
+        """
+        m = self._safe_abort
+        data = m.encode({"Stop_Flag": 0, "Source_Id": 1, "Reason_Code": 1},
+                        strict=True)
+        self._send(m.frame_id, data)
+
     def send_gear_status(self, gear_idx):
         """GearStatus 송신. (HMI GearSlider 순서 R/P/D = 0/1/2 그대로 매핑 — ECU 합의 시 조정)"""
         m = self._gear_status
@@ -263,7 +279,22 @@ class CanHub(QObject):
                 self.driveStatusReceived.emit(
                     float(d["Current_Velocity"]),
                     int(d["Drive_Motor_Current"]),
-                    int(d["Current_Gear_Status"]))
+                    int(d["Current_Gear_Status"])
+                )
+
+            elif msg.arbitration_id == 0x060:
+                print("[RX] Heartbeat_ACK" ,list(msg.data))
+
+            elif msg.arbitration_id == self._safe_abort.frame_id:
+                # SafeAbort(0x010): Stop_Flag=1 발동 / 0 해제. decode 실패해도 0x010 자체가
+                #   비상 신호라 보수적으로 '발동'으로 본다(안전측 기본값).
+                try:
+                    active = bool(self._db.decode_message(
+                        msg.arbitration_id, msg.data)["Stop_Flag"])
+                except Exception:
+                    active = True
+                print("[RX] SafeAbort", list(msg.data), "active=", active)
+                self.safeAbortReceived.emit(active)
 
     # =====================================================================
     # Heartbeat 송신 (Central_Supervisor 생존 신호 — 전용 스레드)

@@ -134,6 +134,71 @@ ApplicationWindow {
         }
     }
 
+    // SafeAbort(0x010) 발동 — 전체 화면 빨강 경보 + 해제 버튼.
+    //   감시 노드(Monitor_Node)가 비상정지(SafeAbort, Stop_Flag=1)를 발신하면 배경 전체가
+    //   빨갛게 깜빡인다. [SafeAbort 해제] 버튼 → CAN 0x010 해제 명령(Stop_Flag=0 / 00 01 01) 송신.
+    //   z 는 호밍/끼임 오버레이보다 위(최상단) — 비상정지가 항상 우선.
+    Item {
+        id: safeAbortOverlay
+        anchors.fill: parent
+        z: 2000
+        visible: vehicleState.safeAbort
+
+        // 배경 전체가 빨강으로 명멸(깜빡임). 버튼/문구는 위에서 항상 또렷하게.
+        Rectangle {
+            anchors.fill: parent
+            color: "#ff0000"
+            opacity: 0.85
+            SequentialAnimation on opacity {
+                running: safeAbortOverlay.visible
+                loops: Animation.Infinite
+                NumberAnimation { from: 0.85; to: 0.30; duration: 400 }
+                NumberAnimation { from: 0.30; to: 0.85; duration: 400 }
+            }
+        }
+        // 뒤 콘텐츠 입력 완전 차단
+        MouseArea { anchors.fill: parent; hoverEnabled: true; onClicked: {} }
+
+        Column {
+            anchors.centerIn: parent
+            width: Math.min(parent.width * 0.72, 660)
+            spacing: 26
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: "⛔ SAFE ABORT"
+                color: "white"; font.pixelSize: 60; font.bold: true
+            }
+            Text {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                lineHeight: 1.3
+                text: "비상정지(SafeAbort)가 발동되었습니다 (0x010).\n안전을 확인한 뒤 아래 버튼으로 해제하세요."
+                color: "white"; font.pixelSize: 22; font.bold: true
+            }
+            // 해제 버튼 — CAN 으로 0x010 해제 명령(00 01 01) 송신
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: abortTxt.implicitWidth + 84
+                height: 70; radius: 12
+                color: abortMa.pressed ? "#1f6f2f" : "#2fae4e"
+                border.color: "white"; border.width: 2
+                Text {
+                    id: abortTxt
+                    anchors.centerIn: parent
+                    text: "SafeAbort 해제"
+                    color: "white"; font.pixelSize: 24; font.bold: true
+                }
+                MouseArea {
+                    id: abortMa
+                    anchors.fill: parent
+                    onClicked: vehicleState.clearSafeAbort()
+                }
+            }
+        }
+    }
+
     // 끼임(과전류) 감지 — 오른쪽 패널 위 확인 오버레이.
     //   과전류 = 끼임(별개 아님). anyPinch 동안 오른쪽 UI를 덮어 경고 + [확인]을 띄우고,
     //   확인 시 resolvePinch()가 끼인 좌석에 재명령을 보내 펌웨어 끼임 래치를 해제한다.
