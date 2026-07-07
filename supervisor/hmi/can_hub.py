@@ -105,9 +105,15 @@ class CanHub(QObject):
         self._running = False
         self._rx_thread = None
 
+        # Heartbeat(0x050) 주기 송신 — Central_Supervisor 생존 신호. 전용 스레드.
+        self._hb_running = False
+        self._hb_thread = None
+        self._hb_period = 0.1              # 100ms (감시 노드 검증 시 쓰던 주기와 동일)
+
         # 자주 쓰는 메시지 핸들 캐시
         self._drive_cmd = self._db.get_message_by_name("Drive_Cmd")
         self._gear_status = self._db.get_message_by_name("GearStatus")
+        self._heartbeat = self._db.get_message_by_name("Heartbeat")
         self._drive_status_id = self._db.get_message_by_name("Drive_Status").frame_id
 
         # 수신 디스패치 테이블: frame_id → (seat_key, recline_sig, rotate_sig|None, pinch_sig)
@@ -260,9 +266,54 @@ class CanHub(QObject):
                     int(d["Current_Gear_Status"]))
 
     # =====================================================================
+    # Heartbeat 송신 (Central_Supervisor 생존 신호 — 전용 스레드)
+    # =====================================================================
+    def start_heartbeat(self, period=None):
+        """Central_Supervisor 생존 신호(Heartbeat 0x050) 주기 송신 시작.
+
+        감시 노드(Monitor_Node)는 이 하트비트가 몇 초간 끊기면 '메인 제어기가 죽었다'고
+        판단해 SafeAbort(0x010)를 발신한다. 즉 여기서 중요한 건 '평균 주기'가 아니라
+        '한 번도 크게 밀리지 않는 것' 이다. 그래서:
+          · GUI/렌더 지터·QML 이벤트 루프와 무관한 전용 데몬 스레드에서 보낸다.
+          · 루프 안에서는 print 같은 blocking I/O 를 절대 하지 않는다(콘솔/SSH 가 막히면
+            그 사이 하트비트가 비고 → 감시 노드 오발동 → SafeAbort 튐).
+          · 상대 sleep(작업시간만큼 계속 뒤로 밀림) 대신 절대시각 스케줄로 드리프트를 없앤다.
+        """
+        if self._hb_running:
+            return
+        if period is not None:
+            self._hb_period = period
+        self._hb_running = True
+        self._hb_thread = threading.Thread(target=self._hb_loop,
+                                           name="can-heartbeat", daemon=True)
+        self._hb_thread.start()
+
+    def _hb_loop(self):
+        m = self._heartbeat
+        counter = 0
+        next_t = time.monotonic()
+        while self._hb_running:
+            # _send 는 예외를 올리지 않고 실패 시 조용히 드롭한다(주기 송신이라 다음 틱에 복구).
+            self._send(m.frame_id, m.encode({"Alive_Counter": counter}, strict=True))
+            counter = (counter + 1) & 0xFF     # 0~255 순환(감시 노드 Alive Stuck 판정용)
+
+            # 절대시각 기준 다음 마감시각까지만 잔다 → send 지연이 누적되지 않는다.
+            next_t += self._hb_period
+            sleep_s = next_t - time.monotonic()
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+            elif sleep_s < -self._hb_period:
+                # 한참 밀렸으면(디버거 정지·과부하) 리듬을 현재 시각으로 재동기화.
+                next_t = time.monotonic()
+
+    # =====================================================================
     # 종료 (휠/CAN RX/GUI 스레드 정리 — 멱등)
     # =====================================================================
     def stop(self):
+        self._hb_running = False
+        if self._hb_thread is not None and self._hb_thread.is_alive():
+            self._hb_thread.join(timeout=1.0)
+            self._hb_thread = None
         if not self._running and self._bus is None:
             return
         self._running = False

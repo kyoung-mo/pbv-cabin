@@ -79,6 +79,12 @@ def main():
         can_hub.busError.connect(lambda m: print(f"CAN: {m}", file=sys.stderr),
                                  Qt.QueuedConnection)
         can_hub.start_rx()
+        # Central_Supervisor 생존 신호(Heartbeat 0x050)를 전용 스레드로 상시 송신한다.
+        #   감시 노드(Monitor_Node)는 이 하트비트가 몇 초 끊기면 메인 제어기가 죽었다고 보고
+        #   SafeAbort(0x010)를 발신한다. 예전엔 cluster/supervision.py(시뮬레이터)만 하트비트를
+        #   보냈는데, 그 TX 루프는 매 틱 print(blocking)+상대 sleep 이라 콘솔 지연 시 하트비트가
+        #   잠깐씩 비어 SafeAbort 가 가끔 튀었다. 실제 supervisor 가 안정적 주기로 직접 보낸다.
+        can_hub.start_heartbeat()
         # 부팅 자동 원점 정렬(뒷좌석 슬라이드) — slide4 는 부팅 호밍이 꺼져 있어(SLIDE_HOMING=0)
         #   전원 시 놓인 위치를 0으로 간주한다. 절대위치 명령 전에 254(호밍)로 물리 원점을 잡는다.
         #   버스/ECU 가 자리잡도록 잠깐 뒤에 시작(그동안 화면은 homingActive 오버레이로 잠금).
