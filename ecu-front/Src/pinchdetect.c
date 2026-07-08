@@ -27,6 +27,7 @@ typedef struct
     uint8_t soft_count_limit;
     uint8_t hard_count_limit;
     uint32_t start_ignore_ms;
+    uint8_t soft_use_avg;
 } PinchThreshold_t;
 
 typedef struct
@@ -79,15 +80,18 @@ static const PinchThreshold_t threshold_map[SEAT_COUNT] =
         .hard_current_A = 0.85f,
         .soft_count_limit = 3U,
         .hard_count_limit = 2U,
-        .start_ignore_ms = 300U
+        .start_ignore_ms = 300U,
+        .soft_use_avg = 1U
+
     },
     [SEAT_PASSENGER] =
     {
-        .soft_current_A = 0.03f,
-        .hard_current_A = 0.70f,
-        .soft_count_limit = 3U,
+        .soft_current_A = 0.30f,
+        .hard_current_A = 0.645f,
+        .soft_count_limit = 8U,
         .hard_count_limit = 2U,
-        .start_ignore_ms = 300U
+        .start_ignore_ms = 200U,
+		.soft_use_avg = 0U
     }
 };
 
@@ -309,6 +313,7 @@ static void process_one_seat(SeatId_t seat, uint32_t now)
     uint8_t servo_moving;
     float current_A;
     float avg_A;
+    float soft_check_A;
 
     if (state->latched != 0U)
     {
@@ -384,6 +389,15 @@ static void process_one_seat(SeatId_t seat, uint32_t now)
     avg_A = update_moving_average(state, current_A);
     seat_measure_ptr(seat)->moving_avg_A = avg_A;
 
+    if (threshold->soft_use_avg != 0U)
+    {
+        soft_check_A = avg_A;
+    }
+    else
+    {
+        soft_check_A = current_A;
+    }
+
     /* hard 조건은 순간 전류 기준이다. 정상 피크와 구분되도록 높게 잡는다. */
     if (current_A >= threshold->hard_current_A)
     {
@@ -398,7 +412,7 @@ static void process_one_seat(SeatId_t seat, uint32_t now)
     }
 
     /* soft 조건은 최근 10개 샘플 이동평균 기준이다. */
-    if (avg_A >= threshold->soft_current_A)
+    if (soft_check_A >= threshold->soft_current_A)
     {
         if (state->soft_count < 255U)
         {

@@ -8,8 +8,8 @@
 #define STATUS_PERIOD_MS              100U
 
 /* 회전 스텝모터 튜닝값 */
-#define DRIVER_ROTATION_180_STEPS       2048L
-#define PASSENGER_ROTATION_180_STEPS   (-2048L)
+#define DRIVER_ROTATION_180_STEPS      (-2048L)
+#define PASSENGER_ROTATION_180_STEPS   2048L
 
 /* 끼임 발생 후 복구 동작 튜닝값
  * 1) 끼임 발생 즉시 정지

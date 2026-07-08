@@ -2,7 +2,7 @@
 #include "main.h"
 
 #define STEP_MOTOR_COUNT      2U
-#define STEP_INTERVAL_MS      3U
+#define STEP_INTERVAL_MS      5U
 
 /* ULN2003 드라이버로 28BYJ-48을 돌리기 위한 half-step 시퀀스 */
 static const uint8_t half_step[8][4] =

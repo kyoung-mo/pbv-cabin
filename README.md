@@ -1,227 +1,266 @@
-# Reconfigurable Cabin v2.0
+# 가변 실내 PBV(Purpose Built Vehicle) · 분산 CAN 기능안전 지향 실내 재배치 플랫폼
 
-**Intel Edge AI SW Academy 9기 최종 프로젝트 · 팀 풀악셀**
-CAN 기반 분산 ECU 가변 실내(PBV) 캐빈 — STM32 + Raspberry Pi
-
----
-
-## 한 줄 정의
-
-> 터치 HMI(모드 선택 + 좌석 개별 제어)와 아우라 레이싱휠(조향각·기어·페달, 수동 주행)을 입력으로 받아,
-> **결정적(deterministic) 안전 슈퍼바이저**가 인터록을 통과한 요청만 CAN 명령으로 바꿔
-> **STM32 존(zone) ECU를 분산 제어**해 좌석을 재배치하고 주행 바퀴를 구동하는 **A2 스케일 PBV 캐빈**.
-
-**캐빈(cabin)** = 차 안 사람이 타는 공간(= 실내). 비행기 "기내"와 같은 단어를 자동차 실내에 쓴 것.
-**리컨피규러블 캐빈** = 좌석을 모드별로 재배치해 모양을 바꿀 수 있는 실내.
-
-실행기간: **2026.06.19. ~ 2026.07.09. (15일)**
+> RPi5(PySide6/QtQuick3D 슈퍼바이저) + STM32 존 ECU ×3 + CAN Bus(500kbps) 기반
+> 터치 HMI·레이싱휠 입력 → 결정적 안전 인터록 → 존 ECU 분산 액추에이션으로
+> 좌석 8축 재배치 + 2륜 차동 드라이브-바이-와이어
+> Intel Edge AI SW Academy 9기 4차 최종 프로젝트 (2026.06~07) · 팀 풀악셀(5인)
 
 ---
 
-## 왜 이 프로젝트인가
+## 🔧 Tech Stack
 
-자율주행·PBV(목적기반차량) 시대에는 차량 실내가 주행뿐 아니라 회의·휴식·적재 등 다양한 용도로 쓰인다.
-다수의 액추에이터가 동시에 움직이는 가변 실내에서 **사용자 입력이 곧바로 액추에이터로 전달되면**
-끼임·오작동·주행 중 좌석 이동 같은 안전사고로 직결된다.
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+![C](https://img.shields.io/badge/C-FreeRTOS%20/%20Bare--metal-A8B9CC?logo=c&logoColor=black)
+![Raspberry Pi 5](https://img.shields.io/badge/Raspberry%20Pi%205-Supervisor-A22846?logo=raspberrypi&logoColor=white)
+![STM32F103](https://img.shields.io/badge/STM32F103-Front%20Zone-03234B?logo=stmicroelectronics&logoColor=white)
+![STM32F446](https://img.shields.io/badge/STM32F446-Rear%20/%20Drive-03234B?logo=stmicroelectronics&logoColor=white)
+![FreeRTOS](https://img.shields.io/badge/FreeRTOS-CMSIS%20v1%2Fv2-8CC84B)
 
-그래서 입력과 액추에이션 사이에 **결정적 안전 검증 계층**을 둔다. 이 프로젝트는 그 계층을
-무하중 A2 모형으로 안전하게 실증하고, 실차 E/E 분산제어와 드라이브-바이-와이어 서사를 통합 검증한다.
-
-> 카메라/AI는 의도적으로 제외했다. 분산 ECU·안전 지향 설계·실차 네트워크·드라이브-바이-와이어에
-> 집중하기 위한 선택이다.
-
----
-
-## 설계 대원칙
-
-1. **단방향 흐름** — `입력(요청) → 안전 인터록(결정적) → CAN 액추에이션`.
-   어떤 입력 노드도 액추에이터를 제어하지 못한다. 모든 입력은 "요청"일 뿐, 인터록 통과 후에만 CAN 명령이 된다.
-2. **분산이 원칙** — 모든 게 중앙 한 곳을 거치지 않는다.
-   조율이 필요한 느린 동작(모드 전이 = 9축 안무)은 슈퍼바이저 경유,
-   즉각 반사가 필요한 빠른 안전 반응(주행 차단·끼임 정지)은 그 액추에이터의 로컬 STM32에서 즉시 처리.
-3. **고장 대응 = fail-safe** — 고장 시 안전정지. 정지된 A2 모형은 멈추면 안전하므로
-   fail-operational(죽어도 계속 운행)은 채택하지 않는다.
-   슈퍼바이저가 사망하면 각 STM32가 하트비트 타임아웃으로 안전정지로 떨어지는 게 기본 거동.
-4. **안전 인증은 주장하지 않는다** — 이 프로젝트는 인증된 기능안전이 아니라 **"안전 지향 설계 패턴"** 의 실증이다.
+![PySide6](https://img.shields.io/badge/PySide6-Qt6-41CD52?logo=qt&logoColor=white)
+![QtQuick3D](https://img.shields.io/badge/QtQuick3D-Digital%20Twin-41CD52?logo=qt&logoColor=white)
+![CAN](https://img.shields.io/badge/CAN%20Bus-500kbps%2011bit-FF6F00)
+![Vector CANdb++](https://img.shields.io/badge/Vector-CANdb%2B%2B-E2001A)
+![cantools](https://img.shields.io/badge/cantools-DBC%20codec-0A7BBB)
+![MCP2515](https://img.shields.io/badge/MCP2515-SocketCAN-555555)
+![pygame](https://img.shields.io/badge/pygame-USB--HID%20Wheel-6495ED)
+![TMC2208](https://img.shields.io/badge/TMC2208-NEMA17%20Slide-00979D)
+![INA226](https://img.shields.io/badge/INA226-Anti--pinch-FFA000)
 
 ---
 
-## 시스템 아키텍처 (5노드 분산 CAN)
+## 💡 Motivation
 
-<img width="650" height="732" alt="image" src="https://github.com/user-attachments/assets/c5945abc-b479-4a0a-8b4d-435a21fdbde1" />
+자율주행·PBV(Purpose Built Vehicle) 시대의 실내는 더 이상 고정된 좌석 배열이 아니다.
+주행·회의·휴식 같은 목적에 따라 실내 공간이 실시간으로 재구성되어야 하고,
+그 재구성은 **운전자·탑승자·주행 상태가 뒤섞인 채로** 안전하게 일어나야 한다.
 
+여기서 핵심 문제의식은 하나다.
 
-* **① 슈퍼바이저 노드** = Supervisor + HMI + 디지털 트윈.
-  본선은 **텔레칩스 D3-G(TCC8050)** Yocto 위 GUI, 폴백은 검증된 **RPi5**.
-  데모날 D3-G가 안 뜨면 RPi5에 슈퍼바이저를 얹어 데모한다("항상 도는 데모" 원칙).
-* **② 계기판 노드(별도 RPi5)** = 레이싱휠 상태(조향각·기어·페달 세기) 표시 + 슈퍼바이저 하트비트를 감시하는
-  **독립 2차 안전 감시자**. 슈퍼바이저가 끊기면 CAN으로 전 노드 **세이프 어보트(정지)** 만 쏠 수 있고,
-  "움직여"는 보낼 수 없다(split-brain 차단). 실차 E-Gas 3단 감시의 Level 3 컨셉 차용.
-* **③④⑤ STM32 존 ECU** = 트랜시버 SN65HVD230. 보드별로 담당 축이 분리되어 있다.
+👉 **어떤 입력도 액추에이터를 곧바로 제어하지 못한다. 모든 입력은 "요청"이며,
+결정적(deterministic) 안전 인터록을 통과해야만 비로소 CAN 명령이 된다.**
 
----
+터치 HMI에서 누른 좌석 프리셋, 레이싱휠에서 밟은 페달, 패들로 넣은 기어 —
+이 모두는 슈퍼바이저의 인터록(기어 P에서만 모드 전이 / 주행 중 좌석 이동 금지 /
+D↔R은 P 경유 / 뒷좌석 리니어 동시구동 금지)을 거쳐야만 존 ECU로 나간다.
+입력과 액추에이션 사이에 **결정적 안전 계층을 물리적으로 끼워 넣는 것**이 이 프로젝트의 설계 축이다.
 
-## 모드 & 9축 재배치
-
-모드 4개: **주행 / 회의 / 차박 / 짐칸**. HMI에서 모드를 고르면 해당 모드의 좌석 안무가 자동 실행된다.
-
-| 재배치 축 | 개수 | 구동 |
-|---|---|---|
-| 앞좌석 회전 | 2 | 스텝(TMC2209) + 턴테이블 베어링 |
-| 리클라인 서보 | 4 | 서보 PWM |
-| 뒷좌석 슬라이드 | 2 | NEMA17 리니어 |
-| 램프(발판) | 1 | 리니어 액추에이터 |
-| **합계** | **9축** | |
-
-여기에 **주행 서브시스템**(아우라 레이싱휠 페달 → 구동 바퀴, JGB37-520 + L298N)이 더해진다.
-
-### 인터록 규칙
-
-* **기어 D/P/R 자체가 인터록 입력.**
-* 주행은 `모드 = DRIVE && 기어 = D && 주행가능 인터록` 전부 통과 시에만 허용. 주행 중 D↔R 급전환은 차단.
-* **모드 전이(좌석 안무)는 기어 = P일 때만** 허용한다.
-* 전이는 **순차 안무**(한 번에 한 축)로 실행 → 스윙 경로 충돌 방지 + 전류가 튀는 시점으로 끼임 축을 시간 분리해 특정.
-  데모 속도가 느려지는 건 수용한다.
-
-> **인터록 ≠ 모드 전이.** 인터록은 "지금 움직여도 되나"를 검사하는 문지기(승인/거부)일 뿐,
-> 좌석을 움직이는 동작이 아니다. 모드 전이는 인터록을 통과했을 때만 실행되는 실제 동작이다.
+> 본 프로젝트는 카메라·AI 인지 기능 대신, **분산 존 ECU · 기능안전 지향 설계 ·
+> 실차 CAN 네트워크 · 드라이브-바이-와이어 아키텍처**에 집중한다.
+> "감지"가 아니라 "요청 → 인터록 → 액추에이션"의 단방향 풀스택을 실장하는 것이 목표다.
 
 ---
 
-## CAN 네트워크 & DBC
+## 📌 Key Features
 
-* 버스 = **클래식 CAN 500kbps** (데이터 ≤ 8바이트). MCP2515가 CAN FD를 지원하지 않아 전체 버스를 클래식으로 통일.
-* 종단 120Ω은 **물리 버스 양 끝 2개만.** 중간 노드(계기판 포함)는 종단 금지.
-* 버스 부하 설계 목표 ≈ 10%.
-* 도구: Vector CANdb++.
-
-| 메시지 | 송신 | 성격 |
-|---|---|---|
-| `SeatCmd` / `DriveCmd` | 슈퍼바이저 | 동작 명령(움직여) |
-| `SeatStatus` / `DriveStatus` | 각 ECU | 상태 브로드캐스트 |
-| `GearStatus` | 계기판 | 기어 +1 D / 0 P / −1 R, 주기 브로드캐스트, 끊기면 P 폴백 |
-| `SafeAbort` | 누구나 | 최고 우선 ID, 출처불문 수신, 자동복귀 금지, 발신자·사유 포함 |
-| `Heartbeat` | 슈퍼바이저 | 계기판이 감시 |
-
-* 모든 메시지에 **롤링 카운터 + 체크섬.**
-* **명령 비대칭** — 동작 명령(움직여)은 슈퍼바이저 ID에서 온 것만 신뢰, 안전 명령(멈춰)은 출처불문 수용 → split-brain 차단.
-* 상태값은 **요청-응답 금지, 브로드캐스트 원칙.**
+- **분산 존(zone) CAN 아키텍처** — 슈퍼바이저(RPi5) 1 + 존 ECU 3(프론트/리어/구동)을 CAN 500kbps·11bit로 묶어 좌석 8축 + 2륜 차동 주행을 분산 제어. 정본 DBC 14메시지(Vector CANdb++), 각 ECU는 cantools 생성 C 코덱(`model_car_net.c/.h`) 공유.
+- **결정적 안전 인터록** — 모든 입력은 슈퍼바이저 `VehicleState`의 인터록을 통과해야 CAN 명령이 된다. 기어=P에서만 모드 전이 / 주행(D·R) 중 좌석 액추에이터 금지 / D↔R은 P 경유 / 뒷좌석 리니어 직렬화(동시구동 금지) / SafeAbort(0x010) 전 노드 비상정지.
+- **드라이브-바이-와이어** — 아우라 레이싱휠(USB-HID, pygame) → 조향/페달/패들 → `Drive_Cmd`(0x100) 50ms 주기 송신. 구동 ECU는 명령 300ms 손실 시 숏브레이크 자동 정지, 기어 로컬 게이팅(P=정지/D=전진/R=후진).
+- **실시간 3D 디지털 트윈** — QtQuick3D로 X-ray 캐빈 3D 모델을 실시간 렌더. 좌석 현재포즈(리클라인/회전/슬라이드)를 상태 피드백으로 추종, 레이싱휠 조향각을 앞바퀴에 연동.
+- **앤티핀치(anti-pinch)** — 리어 존은 INA226 전류감시(170mA 임계·3샘플 디바운스)로 리클라인 서보 끼임 감지 시 15° 후퇴 + Pinch 비트 보고. (프론트 존은 알고리즘 실장, 현재 측정전용 모드 — 아래 §핵심 기능 참조.)
 
 ---
 
-## 펌웨어 구조
+## 🏗️ Architecture
 
-* **계층형 FSM** — System Mode FSM(4모드 전이·사전조건·안무·어보트) 위에 좌석별 서브 FSM(`IDLE → MOVING → LOCKED → FAULT`).
-* **FreeRTOS 태스크** — `CAN_Rx` / `MotorCtrl(10ms)` / `Safety(최우선)` / `Status_Tx`.
-  STM32 3대 모두 동일 뼈대, 구동 ECU만 `Pedal_Read` 추가. `Safety`가 최우선이라 `MotorCtrl` 실행 중에도 선점해 끼임·스톨에 즉시 반응.
-* **페달 필터체인(드라이브-바이-와이어, APPS 방식)** —
-  `raw → RC 저역통과(HW) → ADC 오버샘플 → median-of-5 → EMA → 데드밴드 → 슬루레이트 제한 → 토크` (칼만 미사용).
-
-### 인터록 지연 (설계 목표, 측정값 아님)
-
-| 항목 | 경로 | 목표 |
-|---|---|---|
-| 주행 차단 | STM32 로컬, 결정적 | ~1–10 ms |
-| 모드 전이 | 슈퍼바이저 경유, soft-RT | ~10–50 ms |
-| 링크 페일세이프 | 하트비트 타임아웃 | ~200–500 ms |
-| IWDG | 하드웨어 워치독 | ~100 ms–1 s |
-
-> CAN 1프레임이 ~0.25 ms라 통신은 병목이 아니다. 병목은 태스크 주기다.
-> 그래서 치명 인터록은 슈퍼바이저가 아니라 STM32에 둔다(결정성 + SPOF 회피).
-
-### 안전 설계 패턴
-
-* 주행금지 인터록(킬러컷)
-* 스윙 경로 클리어런스
-* 앤티핀치(INA226 과전류) — **의자 3동작(회전·리클라인·슬라이드)에만.** 주행 모터는 제외(회로 보호는 퓨즈).
-* 세이프 어보트 — 자동복귀 금지, 사람이 리셋
-* IWDG 하드웨어 워치독
-* 하트비트 타임아웃 페일세이프
-
----
-
-## 전원 설계
-
-* **12V 파워서플라이 단일 출발점** → 12V 그대로(모터) / 벅컨버터로 5V(로직·서보) 분기.
-* L298N의 5V 출력(~0.5A)으로는 서보 4개를 못 버티므로 **벅컨버터(5A급) 필수.** L298N 5V는 자기 로직용으로만.
-* **모든 GND는 공통 1점**으로 묶는다.
-* PSU 용량 = 전 모터 전류 합 × 1.3–1.5배(돌입전류 여유). 임시값 10–15A, 모터 모델 확정 후 계산.
-* RPi5·D3-G는 정품/전용 어댑터로 별도 급전.
-
----
-
-## 디지털 트윈 / HMI
-
-* CAN 상태 피드백(`SeatStatus` / `DriveStatus`)을 받아 좌석·주행을 실시간 미러.
-* 본선 = D3-G GPU 활용(Yocto 위 GUI), 백업 = RPi5(Flask 웹).
-* 데모날 D3-G 미동작 시 RPi5로 폴백.
-
----
-
-## 디렉토리 구조 (모노레포)
-
-보드 분리는 **폴더**로, 공용 약속(DBC·인터록·FSM)은 `interface/` 한 곳에서 모두가 공유한다.
-폴더가 다르면 같은 날 push해도 충돌하지 않는다.
+<!-- 아키텍처 다이어그램 이미지 자리 (docs/ 에 배선도·노드 구성도 추가 예정) -->
+<!-- <img width="1000" alt="architecture" src="..."> -->
 
 ```
-.
-├─ interface/         # 공용 약속 — DBC, 인터록 매트릭스, System Mode FSM 전이도 (5명 공용)
-├─ supervisor/        # ① 슈퍼바이저 + HMI + 디지털 트윈
-├─ cluster/           # ② 계기판 노드 (독립 안전 감시자)
-├─ ecu-front/         # ③ 프론트 존 ECU (앞 회전2 + 리클라인2)
-├─ ecu-rear-cargo/    # ④ 리어·카고 ECU (뒤 슬라이드2 + 리클라인2 + 램프1)
-├─ ecu-drive/         # ⑤ 구동 ECU (페달 → 주행 바퀴)
-└─ docs/              # 아키텍처 다이어그램, 발표자료, 회의록
+[터치 HMI]  [아우라 레이싱휠(USB-HID)]
+     └──────────┬───────────┘
+                ▼
+   ┌────────────────────────────┐
+   │  RPi5 Central_Supervisor    │   입력 → 결정적 안전 인터록 → CAN encode
+   │  PySide6 + QtQuick3D + can  │
+   └──────────────┬─────────────┘
+        MCP2515(SPI) / SocketCAN can0
+                ▼  CAN Bus 500kbps · 11bit
+   ┌──────────┬──────────┬──────────┐
+   ▼          ▼          ▼
+[Front F103] [Rear F446] [Drive F446]
+ 베어메탈     FreeRTOS    FreeRTOS
+ 좌석 앞2축   좌석 뒤4축   2륜 차동 주행
 ```
 
----
-
-## 팀 & 역할
-
-팀명: **풀악셀**
-
-| 노드 | 디렉토리 | 담당 | 역할 |
+| 노드 | 보드 | 역할 | 설계 원칙 |
 |---|---|---|---|
-| 총괄 | — | **구영모**(팀장) | 프로젝트 총괄, 중앙 노드 제작, CAN/DBC·FSM·인터록 설계, HW 디버깅 |
-| ① | `supervisor/` | 구영모 | 슈퍼바이저·HMI·트윈 |
-| ② | `cluster/` | 김현주 | 계기판 노드 |
-| ③ | `ecu-front/` | 안해성 | 프론트 존 ECU |
-| ④ | `ecu-rear-cargo/` | 김준기 | 리어·카고 ECU |
-| ⑤ | `ecu-drive/` | 인수민 | 구동 ECU |
-
-추가로 안해성은 CAN DBC 정의를 담당한다.
+| **Central_Supervisor** | Raspberry Pi 5 + MCP2515(SPI, SocketCAN) | 터치 HMI(PySide6/QML) · 3D 디지털 트윈(QtQuick3D) · 레이싱휠 HID · 결정적 안전 인터록 · CAN encode/송수신(cantools) | 입력은 전부 "요청". 인터록을 통과한 것만 CAN 명령으로 나간다(단방향). |
+| **Front_Zone_ECU** | STM32F103CBTx (베어메탈 슈퍼루프) | 운전석·조수석 리클라인(SG90 ×2) + 회전(28BYJ-48+ULN2003 ×2) · 좌석 상태 피드백(0x210/0x211) · SafeAbort 수신 | 논블로킹 협조 스케줄링. Cmd 체크섬 검증, 상태 100ms 주기 송신. |
+| **Rear_Zone_ECU** | STM32F446RE (FreeRTOS CMSIS-v2) | 뒷좌석 좌/우 리클라인(SG90 ×2) + 슬라이드(NEMA17 리드스크류+TMC2208 ×2) · INA226 앤티핀치 · 슬라이드 위치 피드백 · SafeAbort 수신 | Motion(High)/Status(Normal) 태스크 분리. 동시구동 인터록은 슈퍼바이저로 이관. |
+| **Drive_ECU** | STM32F446RE (FreeRTOS CMSIS-v1) | 2륜 차동 주행(JGB37-520 ×2 + L298N) · 조향 믹싱 · 기어 로컬 게이팅 · Drive_Cmd 300ms 손실 정지 · 엔코더 속도 보고 | Drive 명령이 끊기면 결정적으로 정지(페일세이프). 기어 P/미지 = 로컬 주행금지. |
+| *Monitor_Node* | *(미실장)* | *레이싱휠·세이프티가드 신호 수신 / Heartbeat 감시 → SafeAbort 발동* | *DBC상 정의만 존재. 펌웨어는 후속 과제(§핵심 기능 참조).* |
 
 ---
 
-## 하드웨어
+## 📡 CAN 메시지 정의
 
-**보유**: 스텝 17HDC1231 ×2, 엔코더모터 JGB37-520 ×4(주행 바퀴 재활용), STM32(B-L475E·MangoM32),
-SN65HVD230, MCP2515, RPi5, 아우라 레이싱휠, 텔레칩스 D3-G(TCC8050).
+정본 DBC: `supervisor/dbc/model_car_net.dbc` (Vector CANdb++, **14메시지**) · 500 kbps · 11bit 표준 ID
+슈퍼바이저는 cantools로 이 DBC를 로드해 encode/decode, 각 ECU는 동일 DBC에서 생성한 C 코덱을 공유한다.
 
-**추가 확보**: RPi5 1대 더(계기판), MCP2515 5V 모듈, D3-G용 DP 디스플레이 / DP→HDMI 어댑터.
+| CAN ID | 메시지 명 | DLC | 방향 | 주요 신호 | 상태 |
+|---|---|---|---|---|---|
+| `0x050` | `Heartbeat` | 1 | Supervisor → (Drive/Monitor) | `Alive_Counter` | **구현(송신)** — 슈퍼바이저 100ms 상시 송신. 수신·감시는 후속 과제 |
+| `0x060` | `Heartbeat_Ack` | 1 | Monitor → Supervisor | `Ack_Alive_Counter` | 계약만 정의 — 감시노드 미실장 |
+| `0x070` | `GearStatus` | 1 | Supervisor → 전 ECU | `Gear`(0=P/1=D/2=R) | **구현** — 슈퍼바이저 송신, 구동 ECU 로컬 게이팅 |
+| `0x100` | `Drive_Cmd` | 8 | Supervisor → Drive | `Target_Velocity`, `Steering_Angle`, `Brake_Depth` | **구현** — 레이싱휠 50ms 주기 |
+| `0x110` | `Driver_Seat_Cmd` | 4 | Supervisor → Front | `Drv_Recline/Rotation_Angle`, `Rolling_Counter`, `Checksum` | **구현** — 체크섬 검증 |
+| `0x111` | `Passenger_Seat_Cmd` | 2 | Supervisor → Front | `Psgr_Recline/Rotation_Angle` | **구현** |
+| `0x120` | `Rear_Left_Seat_Cmd` | 2 | Supervisor → Rear | `RL_Recline_Angle`, `RL_Slide_Position` | **구현** — 슬라이드 센티넬(254 호밍/255 재영점/253 홀드) |
+| `0x121` | `Rear_Right_Seat_Cmd` | 3 | Supervisor → Rear | `RR_Recline_Angle`, `RR_Slide_Position`, `Cargo_Lamp_Status` | **구현** — 램프 신호는 GPIO 미배선 |
+| `0x200` | `Drive_Status` | 8 | Drive → Supervisor | `Current_Velocity`, `Drive_Motor_Current`, `Current_Gear_Status` | **구현** — 속도=엔코더 실측, 전류=스텁(0) |
+| `0x210` | `Driver_Seat_Status` | 3 | Front → Supervisor | `Curr_Drv_Recline/Rotate`, `Drv_Pinch_Detected` | **구현** — 100ms 주기 |
+| `0x211` | `Passenger_Seat_Status` | 3 | Front → Supervisor | `Curr_Psgr_Recline/Rotate`, `Psgr_Pinch_Detected` | **구현** |
+| `0x220` | `Rear_Left_Seat_Status` | 3 | Rear → Supervisor | `Curr_RL_Recline`, `RL_Pinch_Detected`, `Curr_RL_Slide` | **구현** — 앤티핀치 활성, 슬라이드 위치 피드백 |
+| `0x221` | `Rear_Right_Seat_Status` | 3 | Rear → Supervisor | `Curr_RR_Recline`, `RR_Pinch_Detected`, `Curr_RR_Slide` | **구현** |
+| `0x010` | `SafeAbort` | 3 | Supervisor(+Monitor) → 전 노드 | `Stop_Flag`, `Source_Id`, `Reason_Code` | **구현(수신 4노드 + 해제 송신)** — 발동(Stop_Flag=1) 주입 주체는 후속 과제 |
 
-**주문**: TMC2209 ×6, 리니어 액추에이터 ×3(리드타임 김 = 최우선), 턴테이블 베어링 ×2, AS5600 ×2,
-INA226 ×2(의자 보드만), 리밋스위치, 벅컨버터 5A ×2, 12V PSU, E-stop, 퓨즈.
-
----
-
-## 로드맵 (15일, 누적식 "항상 도는 데모")
-
-1. **1주차 — 인터페이스 동결**: DBC + 인터록 매트릭스 + System Mode FSM 전이도 확정 → 이후 트랙 병렬.
-2. 서보 4축 → 회전 → 슬라이드 → 램프 → 주행 통합 → 트윈 → 차체 이식.
-3. **D3-G Yocto 브링업**(디스플레이·CAN 드라이버 동작까지)은 별도 트랙으로 병렬. 안 되면 RPi5 폴백이라 본 일정은 막히지 않는다.
-4. 디버깅: 9축 통합, 인터록 라이브 검증, MISRA-C 문법 확인(cppcheck --addon=misra).
-
-5트랙(기구/HW · 존 ECU 펌웨어 · 주행/페달 · Supervisor·HMI·트윈 · D3-G 브링업) / 5명.
-
----
-
-## 빌드 & 환경 (요약)
-
-* STM32 펌웨어: FreeRTOS, C. (보드별 빌드 방법은 각 `ecu-*/README` 참조 예정)
-* 슈퍼바이저/계기판/트윈: Python (RPi5) / Yocto GUI (D3-G)
-* CAN DBC: Vector CANdb++
+> `Cargo_Lamp_Status`(0x121)는 DBC/코덱에 존재하나 램프 GPIO 미배선(TODO) — 현재 기능 아님.
+> `Heartbeat_Ack`(0x060)·`Monitor_Node`는 CAN 인터페이스만 정의된 상태로, 감시노드 펌웨어는 실장되지 않았다.
 
 ---
 
-*A2 스케일 무하중 모형. 본 프로젝트는 인증된 기능안전이 아니라 안전 지향 설계 패턴의 실증입니다.*
+## ⚙️ 핵심 기능
+
+**결정적 안전 인터록 체계 (슈퍼바이저 `vehicle_state.py`)**
+- 모든 입력(터치 모드/좌석 슬라이더/기어/레이싱휠)은 단일 상태 객체 `VehicleState`를 통과한다. 인터록을 통과하지 못한 요청은 CAN으로 나가지 않는다(단방향: 입력 → 인터록 → encode → send).
+- **모드 전이**: 기어=P(주행 모드)일 때만 허용. 주행/후진(D·R) 중에는 모드 변경 차단.
+- **기어 전이**: D/R 진입은 주행 모드에서만 허용, D↔R은 반드시 P 경유(단일 `_apply_gear` 경로에서 슬라이더·휠 패들 공유).
+- **좌석 액추에이터**: 기어 D/R 중에는 좌석 Cmd 송신 거부(`_seat_cmd_approved`).
+- **뒷좌석 리니어 직렬화**: 두 슬라이드 동시구동 절대 금지 → 슈퍼바이저가 큐(`_slide_queue`)로 한 축씩 순차 구동. (펌웨어 레벨 인터록은 2026-07-05 제거하고 이 직렬화로 이관.)
+- **SafeAbort(0x010)**: 수신 시 전체화면 적색 경보. 해제는 `Stop_Flag=0`(00 01 01) 프레임 송신으로 각 노드 래치 해제.
+
+**레이싱휠 HID 파이프라인 (`wheel_input.py` + `can_hub.py`)**
+- 아우라 레이싱휠 USB-HID를 pygame으로 폴링. **P4X(Generic X-Box pad, axes=6) 모드 필수** — 다른 모드면 조향=axis0/페달=axis1/패들=btn4·5 매핑이 어긋나 경고 후 폴백.
+- 조향 axis0 → `Steering_Angle`(±127, 8bit signed 포화, 데드밴드 3°), 페달 axis1 단일축(음수=엑셀→RPM, 양수=브레이크→%), 패들 btn5/btn4 → 기어 업/다운(상승엣지 디바운스).
+- 값 변화가 없어도 `Drive_Cmd`를 **50ms 주기로 무조건 브로드캐스트**(구동 ECU 300ms 손실정지보다 짧게) → 전용 스레드에서 GUI 지터와 무관하게 송신.
+
+**실시간 3D 디지털 트윈 (QtQuick3D)**
+- X-ray 캐빈 3D 모델(`Sports Car.glb`)을 실시간 렌더. 4좌석의 리클라인/회전/슬라이드 현재포즈를 CAN 상태 피드백으로 추종.
+- 앞좌석 회전은 `Curr_*_Rotate` closed-loop 추종, 뒷좌석 슬라이드는 이동 중 open-loop 트윈 + 완료 시 `Curr_*_Slide` 실측 스냅.
+- 레이싱휠 조향각을 앞바퀴 3D에 연동, ACTIVE↔AMBIENT(대기) UI 전환 + 무입력 타이머.
+
+**존 ECU별 제어**
+- *Front(F103, 베어메탈)*: 논블로킹 슈퍼루프. 리클라인 SG90 ×2(TIM2 PWM, 500–2500µs=0–180°) + 회전 28BYJ-48 ×2(ULN2003 8상 하프스텝, 2048스텝=180°). `Driver_Seat_Cmd` 체크섬(8bit 합) 검증, 상태 100ms 송신. SafeAbort 수신 시 전 축 정지.
+- *Rear(F446, FreeRTOS v2)*: Motion(High)/Status(Normal)/idle 3태스크. 리클라인 SG90 ×2 + 슬라이드 NEMA17+TMC2208 ×2(1/2 마이크로스텝, 396.8 step/mm, 0–100mm). 센서리스 하드스톱 호밍(센티넬 254), 슬라이드 위치 개루프 스텝카운트를 0–100mm(미확정 시 0xFF)로 보고.
+- *Drive(F446, FreeRTOS v1)*: DriveTask(High, 10ms)/CanTxTask(Normal, 10ms). 조향 차동 믹싱(`v_steer = angle×0.5`, 좌=base+steer/우=base−steer), L298N TIM1 PWM 2채널. **속도는 TIM2/TIM3 쿼드러처 엔코더 실측 RPM을 `Current_Velocity`로 보고(모니터링)하되, 듀티 계산 자체는 PID 없는 개루프 차동**. 기어 로컬 게이팅(P/미지=정지). `Drive_Cmd` 300ms 손실 시 4핀 HIGH 숏브레이크.
+
+**앤티핀치(anti-pinch)**
+- *Rear(활성)*: INA226 듀얼(I2C 0x40/0x41, 션트 100mΩ)로 리클라인 서보 전류 감시. 임계 **170mA**(3샘플 디바운스, 20ms 폴링) 초과 시 `servo_pinch_relief()`가 **15° 후퇴** + 목표 덮어써 정지, `*_Pinch_Detected` 비트 보고. (보호 대상은 리클라인 서보, 슬라이드는 전류감시 없음.)
+- *Front(측정전용)*: INA226 듀얼 + 이중임계 알고리즘(운전석 soft 0.11A/hard 0.85A, 조수석 soft 0.03A/hard 0.70A)이 **실장되어 있으나 `PINCH_MEASURE_ONLY_MODE=1`로 컴파일** — 감지는 하되 래치/정지가 비활성이라 실동작에서 액추에이터를 멈추지 않는다(Pinch 비트 항상 0). **활성 정지 로직은 후속 과제.**
+
+**기능안전 지향 설계 — 구현 현황(정직 구분)**
+- ✅ **구현**: SafeAbort(0x010) 전 노드 비상정지 수신 + 슈퍼바이저 해제 송신 / 구동 ECU Drive_Cmd 300ms 손실정지 / 리어 앤티핀치 활성 / 결정적 인터록·직렬화 / Heartbeat(0x050) 슈퍼바이저 상시 송신.
+- ⏳ **설계·CAN 인터페이스(DBC) 정의 완료, 구현은 후속 과제**: 감시노드(Monitor_Node) 펌웨어 / Heartbeat 감시·응답(0x060) 및 ECU측 하트비트 손실 페일세이프 / SafeAbort 발동(Stop_Flag=1) 자동 주입 / IWDG 워치독(3 ECU 전부 미사용) / 프론트 앤티핀치 활성화 / 프론트·리어 링크(명령손실) 페일세이프 / 좌석 상태 FSM enum / 좌석 과전류 E-stop CAN 배선.
+
+> ⚠️ 본 프로젝트는 **기능안전 지향 설계 패턴**을 실장·검증하는 것을 목표로 하며,
+> 기능안전 표준(ISO 26262 등) "인증"을 주장하지 않는다.
+
+---
+
+## 📁 프로젝트 구조
+
+```
+pbv-cabin/
+├── supervisor/                 # RPi5 Central_Supervisor (Python)
+│   ├── dbc/model_car_net.dbc   #   ★ 정본 DBC (14메시지, Vector CANdb++)
+│   ├── hmi/
+│   │   ├── main.py             #   PySide6 엔트리 — CanHub/VehicleState/WheelInput 결선
+│   │   ├── vehicle_state.py    #   ★ 단일 상태 객체 — 입력→인터록→CAN, 상태→트윈
+│   │   ├── can_hub.py          #   can0 송수신 허브(cantools) + Heartbeat/SafeAbort
+│   │   ├── wheel_input.py      #   레이싱휠 USB-HID(pygame) → Drive_Cmd 50ms
+│   │   ├── qml/                #   HMI + QtQuick3D 디지털 트윈
+│   │   │   ├── Main.qml  Cabin3D.qml  Seat3D.qml  SteeringWheel.qml
+│   │   │   ├── ModeSelect.qml  SeatDetail.qml  SeatOverview.qml  GearSlider.qml …
+│   │   ├── assets/models/      #   X-ray 캐빈 GLB
+│   │   └── tools/              #   dummy_ecu.py(ECU 없이 트윈 검증) · 에셋 생성
+│   └── handle/                 #   레이싱휠 실험 스크립트(drive_game/handle …)
+│
+├── ecu-front/                  # Front_Zone_ECU — STM32F103, 베어메탈
+│   └── Src/  can.c  front_seat_app.c  servo.c  step.c  pinchdetect.c  main.c
+│
+├── ecu-rear-cargo/            # Rear_Zone_ECU — STM32F446, FreeRTOS CMSIS-v2
+│   └── firmware/slide4/       #   ★ 정본 (slide2/slide3 = legacy)
+│       └── Core/Src/  can.c  slide.c  servo.c  ina226.c  main.c  model_car_net.c
+│
+├── ecu-drive/                 # Drive_ECU — STM32F446, FreeRTOS CMSIS-v1
+│   ├── PowerTrain_F446_freeRTOS/   #   ★ 정본
+│   │   └── Core/Src/  main.c  freertos.c  model_car_net.c
+│   └── PowerTrain_F446/            #   (legacy) 베어메탈 구현
+│
+├── cluster/supervision.py     # 감시노드 검증용 슈퍼바이저 흉내 시뮬레이터(테스트 하네스)
+├── fw_slide4/                 # (legacy) 리어 정본의 분기 벤치 사본
+├── interface/                 # FSM·인터록매트릭스 문서 placeholder
+└── docs/                      # 설계 문서·배선도
+```
+
+---
+
+## 🚀 빠른 시작
+
+**Central_Supervisor (RPi5)**
+```bash
+# MCP2515 SocketCAN 인터페이스 기동
+sudo ip link set can0 up type can bitrate 500000
+# 슈퍼바이저 앱 (PySide6 + QtQuick3D)
+cd supervisor/hmi && python3 main.py
+#   HMI_WINDOWED=1 ...   창모드(원격/검증)
+#   HMI_NOCAN=1 ...      CAN/휠 없이 화면만
+#   python3 tools/dummy_ecu.py   # 실 ECU 없이 좌석 트윈 검증
+```
+
+**Front_Zone_ECU (STM32F103)**
+```
+STM32CubeIDE: ecu-front import → Build → Flash (ST-Link)
+```
+
+**Rear_Zone_ECU (STM32F446, 정본 slide4)**
+```
+STM32CubeIDE: ecu-rear-cargo/firmware/slide4 import → Build → Flash
+```
+
+**Drive_ECU (STM32F446, 정본 freeRTOS)**
+```
+STM32CubeIDE: ecu-drive/PowerTrain_F446_freeRTOS import → Build → Flash
+```
+
+---
+
+## 🛠️ 개발 환경
+
+| 항목 | 내용 |
+|---|---|
+| 슈퍼바이저 | Raspberry Pi 5, Python 3.13, PySide6/Qt6(QtQuick3D), python-can + cantools, MCP2515(SPI) SocketCAN |
+| 입력 장치 | 아우라 레이싱휠(USB-HID, pygame, P4X 모드), 터치 디스플레이 |
+| Front Zone ECU | STM32F103CBTx (베어메탈 슈퍼루프), STM32CubeIDE, SG90 ×2 + 28BYJ-48/ULN2003 ×2 |
+| Rear Zone ECU | STM32F446RE (FreeRTOS CMSIS-v2), SG90 ×2 + NEMA17/TMC2208 ×2, INA226 ×2 |
+| Drive ECU | STM32F446RE (FreeRTOS CMSIS-v1), JGB37-520 ×2 + L298N, 쿼드러처 엔코더 |
+| 차량 네트워크 | CAN Bus 500 kbps · 11bit 표준 ID, DBC(Vector CANdb++) 14메시지 |
+
+---
+
+## 👥 팀 풀악셀 (5인)
+
+| 노드 / 디렉토리 | 담당 | 역할 |
+|---|---|---|
+| 총괄 · `supervisor/` | **구영모**(팀장) | 프로젝트 총괄, 슈퍼바이저·HMI·3D 트윈, CAN/DBC·인터록 설계, HW 디버깅 |
+| `cluster/` | 김현주 | 감시노드 트랙 · 하트비트/세이프어보트 검증 하네스 |
+| `ecu-front/` | 안해성 | 프론트 존 ECU(앞좌석 2축) · CAN DBC 정의 |
+| `ecu-rear-cargo/` | 김준기 | 리어 존 ECU(뒷좌석 슬라이드·리클라인, 앤티핀치) |
+| `ecu-drive/` | 인수민 | 구동 ECU(2륜 차동 주행·페달) |
+
+---
+
+## 🎯 산출물
+
+- **4노드 분산 CAN 프로토타입** — 슈퍼바이저 1 + 존 ECU 3(F103 베어메탈 / F446 FreeRTOS ×2)이 CAN 500kbps로 실동작.
+- **좌석 8축 재배치** — 앞 4축(리클라인·회전 ×2) + 뒤 4축(리클라인·슬라이드 ×2), 4모드 프리셋(주행/회의/Full-space/휴식).
+- **정본 DBC 14메시지** — cantools 코덱을 슈퍼바이저·ECU가 공유(단일 소스 오브 트루스). 구현/계약정의 상태를 CAN 표에 정직 명시.
+- **드라이브-바이-와이어** — 레이싱휠 `Drive_Cmd` 50ms 주기 → 구동 ECU 2륜 차동 + 조향 믹싱, **300ms 명령손실 페일세이프**, 기어 로컬 게이팅.
+- **결정적 안전 인터록** — 모드/기어/좌석/직렬화/SafeAbort 인터록을 슈퍼바이저 단일 상태 객체에 집약.
+- **앤티핀치** — 리어 INA226 **170mA 임계 · 15° 후퇴** 활성, 프론트 이중임계 알고리즘 실장(측정전용).
+- **실시간 3D 디지털 트윈** — QtQuick3D X-ray 캐빈, 좌석 포즈·조향 CAN 피드백 연동.
+- **베어메탈·FreeRTOS 이중 구현 보존** — 구동 ECU의 legacy 베어메탈, 리어 초기 슬라이드 버전(slide2/3) 트리 보존.
+
+---
+
+*A2 스케일 무하중 모형. 본 프로젝트는 인증된 기능안전이 아니라 기능안전 지향 설계 패턴의 실증입니다.*
