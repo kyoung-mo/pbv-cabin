@@ -149,10 +149,11 @@ View3D {
         // ── 좌석 4개 ──────────────────────────────────────────────
         // 각 좌석은 자기 좌석의 current 값(seatPose)·이동상태(seatMoving)에만 반응.
         //   recline → 등받이 기울기 / axis2 → 앞=Y회전, 뒤=Z슬라이드(isRear)
-        Seat3D {   // 운전석 (front-left)
+        Seat3D {   // 운전석 (트윈 표시는 우측 — 앞좌석 좌/우 스왑)
             id: seatDriver
             isRear: false
-            position: Qt.vector3d(-Cfg.seatHalfX, 0, Cfg.seatFrontZ)
+            position: Qt.vector3d(Cfg.seatHalfX, 0, Cfg.seatFrontZ)
+            rotateSign: -1                 // 조수석과 반대로 돌아 서로 마주봄(트윈 표시 전용)
             recline: vehicleState.seatPose["driver"].recline
             axis2: vehicleState.seatPose["driver"].axis2
             moving: vehicleState.seatMoving["driver"]
@@ -161,10 +162,10 @@ View3D {
             showIndicator: Cfg.showMoveIndicator
             glowColor: Cfg.moveGlowColor
         }
-        Seat3D {   // 조수석 (front-right)
+        Seat3D {   // 조수석 (트윈 표시는 좌측 — 앞좌석 좌/우 스왑)
             id: seatPassenger
             isRear: false
-            position: Qt.vector3d(Cfg.seatHalfX, 0, Cfg.seatFrontZ)
+            position: Qt.vector3d(-Cfg.seatHalfX, 0, Cfg.seatFrontZ)
             recline: vehicleState.seatPose["passenger"].recline
             axis2: vehicleState.seatPose["passenger"].axis2
             moving: vehicleState.seatMoving["passenger"]

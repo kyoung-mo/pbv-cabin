@@ -1,0 +1,56 @@
+Unexpected condition met: "QSGRendererInterface::isApiRhiBased(rif->graphicsApi())" in file ./src/quick3d/qquick3dviewport.cpp, line 538
+The Qt Quick scene is using a rendering method that is not based on QRhi and a 3D graphics API. Qt Quick 3D is not functional in such an environment. The View3D item is not going to display anything.
+HMI_NOCAN: CAN/휠 비활성 — 콘솔 폴백으로 실행
+SELFTEST: QML 로드 성공
+SHUTDOWN: 스레드/버스 정리 완료
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/NavBar.qml:15: TypeError: Cannot read property 'uiMode' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/NavBar.qml:23: TypeError: Cannot read property 'uiMode' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Main.qml:20: TypeError: Cannot read property 'uiMode' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/LeftCar.qml:189: TypeError: Cannot read property 'currentVelocity' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/LeftCar.qml:190: TypeError: Cannot read property 'currentVelocity' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/LeftCar.qml:180: TypeError: Cannot read property 'gear' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/LeftCar.qml:14: TypeError: Cannot read property 'wheelSteering' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/LeftCar.qml:89: TypeError: Cannot read property 'wheelBrake' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/LeftCar.qml:56: TypeError: Cannot read property 'wheelThrottle' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/GearSlider.qml:120: TypeError: Cannot read property 'gear' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/GearSlider.qml:114: TypeError: Cannot read property 'gear' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/GearSlider.qml:108: TypeError: Cannot read property 'gear' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/GearSlider.qml:92: TypeError: Cannot read property 'gearLocked' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/GearSlider.qml:93: TypeError: Cannot read property 'gearLocked' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/GearSlider.qml:34: TypeError: Cannot read property 'gearIndex' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/GearSlider.qml:38: TypeError: Cannot read property 'gearLocked' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/GearSlider.qml:40: TypeError: Cannot read property 'gearLocked' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/GearSlider.qml:66: TypeError: Cannot read property 'gearLocked' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/GearSlider.qml:64: TypeError: Cannot read property 'gearLocked' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:180: TypeError: Cannot read property 'seatPose' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:181: TypeError: Cannot read property 'seatPose' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:182: TypeError: Cannot read property 'seatMoving' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:183: TypeError: Cannot read property 'seatPinch' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:169: TypeError: Cannot read property 'seatPose' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:170: TypeError: Cannot read property 'seatPose' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:171: TypeError: Cannot read property 'seatMoving' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:172: TypeError: Cannot read property 'seatPinch' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:158: TypeError: Cannot read property 'seatPose' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:159: TypeError: Cannot read property 'seatPose' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:160: TypeError: Cannot read property 'seatMoving' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:161: TypeError: Cannot read property 'seatPinch' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:147: TypeError: Cannot read property 'seatPose' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:148: TypeError: Cannot read property 'seatPose' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:149: TypeError: Cannot read property 'seatMoving' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:150: TypeError: Cannot read property 'seatPinch' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:21: TypeError: Cannot read property 'uiMode' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:123: TypeError: Cannot read property 'wheelSteering' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:41: TypeError: Cannot read property 'uiMode' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:35: TypeError: Cannot read property 'uiMode' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:59: TypeError: Cannot read property 'gear' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/Cabin3D.qml:18: TypeError: Cannot read property 'seatMoving' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/LeftCar.qml:72:25: TypeError: Cannot read property 'wheelThrottle' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/LeftCar.qml:105:25: TypeError: Cannot read property 'wheelBrake' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/ModeSelect.qml:33: TypeError: Cannot read property 'cabinMode' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/ModeSelect.qml:36: TypeError: Cannot read property 'modeLocked' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/ModeSelect.qml:33: TypeError: Cannot read property 'cabinMode' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/ModeSelect.qml:36: TypeError: Cannot read property 'modeLocked' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/ModeSelect.qml:33: TypeError: Cannot read property 'cabinMode' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/ModeSelect.qml:36: TypeError: Cannot read property 'modeLocked' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/ModeSelect.qml:33: TypeError: Cannot read property 'cabinMode' of null
+file:///home/pi/project/pbv-cabin/supervisor/hmi/qml/ModeSelect.qml:36: TypeError: Cannot read property 'modeLocked' of null

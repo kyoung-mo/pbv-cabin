@@ -23,6 +23,9 @@ Node {
     property bool isRear: false           // false=앞좌석(회전), true=뒷좌석(슬라이드)
     property real axis2: 0                 // 앞=회전(0~180) / 뒤=슬라이드(0~100) current
     property real recline: 90             // 리클라인 current (90=직립)
+    // 앞좌석 회전 방향(+1/-1) — 트윈 표시 전용. 좌/우 좌석에 반대 부호를 줘 같은 명령각에도
+    //   서로 마주보며(대칭으로) 돌게 한다. 실제 좌석/CAN 명령각과 무관한 시각화 보정이다.
+    property real rotateSign: 1
 
     // 이동 표시(보간 중 하이라이트) — Cabin3D 에서 vehicleState.seatMoving + Cfg 주입.
     property bool moving: false           // 이 좌석이 목표까지 이동(보간) 중인가
@@ -54,7 +57,7 @@ Node {
                                                     effGlowColor.b * glow * glowScale)
 
     // --- axis2 → 변환값 ---
-    readonly property real rotateDeg: isRear ? 0 : axis2         // 앞: Y축 회전(deg)
+    readonly property real rotateDeg: isRear ? 0 : (axis2 * rotateSign)   // 앞: Y축 회전(deg, 부호=마주보기)
     property real slideRange: 140         // 슬라이드 0→100 동안 -Z로 이동하는 총량
     property real slideForward: 40        // slide=0 일 때 +Z(앞)로 당겨지는 양
     readonly property real slideZ: isRear ? (slideForward - axis2 / 100 * slideRange) : 0

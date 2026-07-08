@@ -944,13 +944,16 @@ class VehicleState(QObject):
         return seat in FRONT_SEATS
 
     def _mark_commit(self, seat, axis):
-        """송신 후 트윈 시각화 처리. closed-loop 축은 commanded 만 갱신(status 추종),
-        open-loop 축(뒷좌석 슬라이드)은 로컬 트윈 시작."""
-        if axis == "recline" or self._axis2_closed_loop(seat):
-            ax = self._seat_values[seat][axis]
-            ax["commanded"] = ax["target"]      # status 도달 전까지 '이동중'
-        else:
-            self._start_tween(seat, axis)        # 뒷좌석 슬라이드: current==target 이면 no-op
+        """송신 후 트윈 시각화 처리.
+        · 앞좌석(리클라인·회전): closed-loop — commanded 만 갱신하고 수신 Status(Curr_*)로
+          current 를 추종한다.
+        · 뒷좌석(리클라인·슬라이드): 리어 ECU 가 0x220/0x221 상태를 못 쏴 피드백이 없다 →
+          open-loop. 메인 제어기가 보낸 명령값(target)을 로컬 트윈으로 시각화한다. commanded 도
+          함께 맞춰 '이동중' 판정이 current==commanded 로 정상 종료되게 한다(피드백 없이도 멈춤)."""
+        ax = self._seat_values[seat][axis]
+        ax["commanded"] = ax["target"]          # status 도달 전까지 '이동중'(앞) / 트윈 종료 기준(뒤)
+        if seat in REAR_SEATS:
+            self._start_tween(seat, axis)        # 뒷좌석: 명령 기반 로컬 트윈(current==target 이면 no-op)
 
     def _commit_axis(self, seat, axis):
         """적용: 인터록 통과 시 *_Seat_Cmd 송신. (reject 면 송신/이동 없음)
@@ -1011,12 +1014,21 @@ class VehicleState(QObject):
         self._slide_started = now
         self._slide_deadline = now + SLIDE_MOVE_TIMEOUT_MS
         self._send_seat_burst(seat)          # recline + slide 한 프레임(드롭 방지 5회 반복)
-        self._mark_commit(seat, "recline")   # 리클라인(closed-loop) commanded (1회만)
+        self._mark_commit(seat, "recline")   # 리클라인(open-loop 트윈) 시작 (1회만)
         self._mark_commit(seat, "axis2")     # 슬라이드(open-loop) 3D 트윈 시작 (1회만)
         print(f"SLIDE: {SEAT_LABELS[seat]} 슬라이드 구동 시작(직렬화, 명령 5회 반복)")
         if not self._slide_timer.isActive():
             self._slide_timer.start()
+        # 슬라이드 이동이 없으면(이미 목표 위치) open-loop 트윈이 안 생겨 완료 이벤트도 없다 →
+        #   0x220/0x221 피드백도 없어 다음 축이 무한 대기하므로, 즉시 완료 처리한다(재진입 피해 지연 콜백).
+        if (seat, "axis2") not in self._tweens:
+            QTimer.singleShot(0, lambda s=seat: self._finish_rear_slide_if(s))
         self.seatMovingChanged.emit()
+
+    def _finish_rear_slide_if(self, seat):
+        """지정 좌석이 아직 구동 중이면 완료 처리 — 슬라이드 이동 없이 즉시 끝나는 경우의 지연 콜백."""
+        if self._slide_busy == seat:
+            self._finish_rear_slide("이동없음")
 
     def _finish_rear_slide(self, reason):
         """현재 슬라이드 완료 → 다음 대기 좌석 시작(직렬). 완료 콜백들도 갱신."""
@@ -1326,6 +1338,12 @@ class VehicleState(QObject):
         if not self._tweens:
             self._tween_timer.stop()
         if done:
+            # 뒷좌석 슬라이드(open-loop) 트윈이 끝나면 = 그 좌석 이동 완료 → 직렬화 큐의 다음 축 시작.
+            #   리어 ECU 가 0x220/0x221 상태를 못 쏘므로 완료를 명령 기반 트윈으로 판정한다
+            #   (예전엔 수신 위치로 판정했으나 피드백이 없어 트윈이 진실).
+            for seat, axis in done:
+                if axis == "axis2" and seat in REAR_SEATS and self._slide_busy == seat:
+                    self._finish_rear_slide("트윈완료")
             self.seatMovingChanged.emit()   # 도착한 좌석 이동중 표시 해제
             # 주행 모드 좌석 배치 완료(뒷좌석 슬라이드 트윈 종료) 시 홈 자동 이동.
             self._check_drive_settle()
