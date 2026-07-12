@@ -1,4 +1,5 @@
-# CAN 기반 가변 실내 PBV(Purpose Built Vehicle) · 🥇 최종 프로젝트 경진대회 대상
+# CAN 기반 가변 실내 PBV(Purpose Built Vehicle)
+# 🥇 최종 프로젝트 경진대회 대상
 
 > RPi5(PySide6/QtQuick3D 메인 제어기) + STM32 존 ECU ×3 + CAN Bus(500kbps) 기반
 > 터치 HMI·레이싱휠 입력 → 결정적 안전 인터록 → 존 ECU 분산 액추에이션으로
@@ -222,10 +223,10 @@ STM32CubeIDE: ecu-drive/PowerTrain_F446_freeRTOS import → Build → Flash
 | 노드 / 디렉토리 | 담당 | 역할 |
 |---|---|---|
 | 총괄 · `supervisor/` | **구영모**(팀장) | 프로젝트 총괄, 메인 제어기·HMI·3D 트윈, CAN/DBC·인터록 설계, HW 디버깅 |
-| `cluster/` | 김현주 | 감시노드 트랙 · 하트비트/세이프어보트 검증 하네스 |
-| `ecu-front/` | 안해성 | 프론트 존 ECU(앞좌석 2축) · CAN DBC 정의 |
-| `ecu-rear-cargo/` | 김준기 | 리어 존 ECU(뒷좌석 슬라이드·리클라인, 앤티핀치) |
-| `ecu-drive/` | 인수민 | 구동 ECU(2륜 차동 주행·페달) |
+| `cluster/` | 인수민 | 3D 모델링 · 감시노드 트랙 · 하트비트/세이프어보트 검증 하네스 |
+| `ecu-front/` | 김현주 | 프론트 존 ECU(앞좌석 2축, 앤티핀치) · 하드웨어 제작 |
+| `ecu-rear-cargo/` | 김준기 | 리어 존 ECU(뒷좌석 슬라이드·리클라인 4축, 앤티핀치) |
+| `ecu-drive/` | 안해성 | 구동 ECU(2륜 차동 주행·페달 2축) · CAN DBC 정의 |
 
 ---
 
