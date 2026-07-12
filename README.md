@@ -11,7 +11,7 @@
 ## 🔧 Tech Stack
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
-![C](https://img.shields.io/badge/C-FreeRTOS%20/%20Bare--metal-A8B9CC?logo=c&logoColor=black)
+![C](https://img.shields.io/badge/C-FreeRTOS%20-A8B9CC?logo=c&logoColor=black)
 ![Raspberry Pi 5](https://img.shields.io/badge/Raspberry%20Pi%205-Main%20Controller-A22846?logo=raspberrypi&logoColor=white)
 ![STM32F103](https://img.shields.io/badge/STM32F103-Front%20Zone-03234B?logo=stmicroelectronics&logoColor=white)
 ![STM32F446](https://img.shields.io/badge/STM32F446-Rear%20/%20Drive-03234B?logo=stmicroelectronics&logoColor=white)
